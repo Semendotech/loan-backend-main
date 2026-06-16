@@ -312,14 +312,19 @@ async def download_payments_report(
     db: AsyncSession = Depends(get_db),
 ):
     """Generate a PDF listing all payments made on a specific date (defaults to today)."""
-    target_date = datetime.utcnow().date() if not date_str else datetime.strptime(date_str, "%Y-%m-%d").date()
+    eat_zone = ZoneInfo("Africa/Nairobi")
+    target_date = datetime.now(eat_zone).date() if not date_str else datetime.strptime(date_str, "%Y-%m-%d").date()
+
+    start_of_day_eat = datetime.combine(target_date, time.min, tzinfo=eat_zone)
+    end_of_day_eat = datetime.combine(target_date, time.max, tzinfo=eat_zone)
+    start_of_day_utc = start_of_day_eat.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    end_of_day_utc = end_of_day_eat.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
     query = """
         SELECT 
             i.id as installment_id,
             i.amount as payment_amount,
             i.payment_date as payment_date,
-            l.id as loan_id,
             l.amount as principal_amount,
             l.total_amount as total_amount,
             l.remaining_amount as remaining_amount,
@@ -329,11 +334,12 @@ async def download_payments_report(
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
         JOIN customers c ON l.customer_id = c.id_number
-        WHERE DATE(i.payment_date) = :pdate
+        WHERE i.payment_date >= :start_utc
+          AND i.payment_date <= :end_utc
         ORDER BY i.payment_date DESC
     """
 
-    result = await db.execute(text(query), {"pdate": target_date})
+    result = await db.execute(text(query), {"start_utc": start_of_day_utc, "end_utc": end_of_day_utc})
     rows = result.fetchall()
 
     filename = f"payments_{target_date.isoformat()}.pdf"
