@@ -387,7 +387,7 @@ async def download_payments_report(
     c.setFillColor(colors.HexColor("#0F172A"))
     headers = ["Time", "Customer", "ID", "Phone", "Amount"]
     usable_width = width - 2 * margin_x
-    widths = [0.9, 2.0, 1.0, 1.1, usable_width / inch - (0.9 + 2.0 + 1.0 + 1.1)]
+    widths = [0.7, 2.1, 1.1, 1.15, 1.0]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
@@ -401,19 +401,17 @@ async def download_payments_report(
         c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
     y = header_y - 0.4 * inch
 
-    c.setFont("Helvetica", 10)
+    c.setFont("Helvetica", 9)
     line_height = 0.32 * inch
     for r in rows:
         if y - line_height < 1.0 * inch:
             c.showPage()
             y = height - inch
-            c.setFont("Helvetica", 10)
+            c.setFont("Helvetica", 9)
 
         # Convert payment_date from UTC to Africa/Nairobi (UTC+3)
         payment_date_eat = r.payment_date.replace(tzinfo=ZoneInfo('UTC')).astimezone(ZoneInfo('Africa/Nairobi'))
-        customer_name = r.customer_name or ""
-        if len(customer_name) > 30:
-            customer_name = customer_name[:27] + "..."
+        customer_name = (r.customer_name or "")[:26]
         customer_phone = (r.customer_phone or "-")[:12]
         values = [
             payment_date_eat.strftime("%H:%M"),
