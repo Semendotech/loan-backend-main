@@ -42,30 +42,6 @@ async def startup_event():
             await conn.run_sync(Base.metadata.create_all)
             print("✅ Tables created or already exist.")
 
-            try:
-                await conn.execute(text("ALTER TABLE loans MODIFY COLUMN customer_id VARCHAR(30) NOT NULL"))
-            except Exception:
-                pass
-            try:
-                await conn.execute(text("ALTER TABLE loans DROP FOREIGN KEY loans_ibfk_1"))
-            except Exception:
-                pass
-            try:
-                await conn.execute(text("ALTER TABLE loans ADD CONSTRAINT fk_loans_customer_id FOREIGN KEY (customer_id) REFERENCES customers(id_number)"))
-            except Exception:
-                pass
-            try:
-                await conn.execute(text("ALTER TABLE customers DROP COLUMN address"))
-                print("✅ Dropped 'address' column from customers")
-            except Exception:
-                pass
-            try:
-                await conn.execute(text("UPDATE customers SET id_number = CONCAT('MISSING-', id) WHERE id_number IS NULL"))
-                await conn.execute(text("ALTER TABLE customers MODIFY COLUMN id_number VARCHAR(30) NOT NULL"))
-                print("✅ Enforced NOT NULL on 'id_number' for customers")
-            except Exception:
-                pass
-
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(models.User).filter_by(username="admin"))
             user = result.scalar_one_or_none()
