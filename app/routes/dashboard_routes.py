@@ -440,3 +440,131 @@ async def download_payments_report(
         filename=filename
     )
 
+
+@router.get("/overdue-report", response_class=FileResponse)
+async def download_overdue_report(
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a PDF listing all active overdue balances."""
+    eat_zone = ZoneInfo("Africa/Nairobi")
+
+    query = """
+        SELECT 
+            a.id as arrears_id,
+            a.original_amount as original_amount,
+            a.remaining_amount as remaining_amount,
+            a.arrears_date as arrears_date,
+            l.id as loan_id,
+            c.name as customer_name,
+            c.id_number as customer_id_number,
+            c.phone as customer_phone
+        FROM arrears a
+        JOIN loans l ON a.loan_id = l.id
+        JOIN customers c ON a.customer_id = c.id_number
+        WHERE a.is_cleared = false
+        ORDER BY a.arrears_date ASC
+    """
+
+    result = await db.execute(text(query))
+    rows = result.fetchall()
+
+    filename = f"overdue_report_{datetime.now(eat_zone).date().isoformat()}.pdf"
+    filepath = os.path.join("reports", filename)
+    os.makedirs("reports", exist_ok=True)
+
+    c = canvas.Canvas(filepath, pagesize=A4)
+    width, height = A4
+    margin_x = 0.85 * inch
+    y = height - 0.8 * inch
+
+    # Header bar
+    c.setFillColor(colors.HexColor("#7C2D12"))
+    c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 18)
+    title = f"Overdue Report"
+    c.drawString(margin_x, height - 0.5 * inch, title)
+    c.setFont("Helvetica", 11)
+    c.drawString(margin_x, height - 0.75 * inch, f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}")
+
+    y = height - 1.3 * inch
+
+    # Summary pills
+    total_overdue = sum(float(r.remaining_amount or 0) for r in rows)
+    pill_height = 0.45 * inch
+    pill_width = (width - 2 * margin_x - 0.3 * inch) / 2
+
+    def draw_pill(x, label, value, accent):
+        nonlocal y
+        c.setFillColor(colors.HexColor(accent))
+        c.roundRect(x, y - pill_height, pill_width, pill_height, 8, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawCentredString(x + pill_width / 2, y - 0.17 * inch, f"{label}    {value}")
+
+    draw_pill(margin_x, "Total Overdue", f"KSh {total_overdue:,.2f}", "#DC2626")
+    draw_pill(margin_x + pill_width + 0.3 * inch, "Overdue Cases", str(len(rows)), "#9333EA")
+    y -= pill_height + 0.35 * inch
+
+    # Table headers
+    c.setFont("Helvetica-Bold", 10)
+    c.setFillColor(colors.HexColor("#0F172A"))
+    headers = ["#", "Customer", "ID", "Phone", "Loan #", "Original", "Remaining", "Since"]
+    usable_width = width - 2 * margin_x
+    widths = [0.35, 1.8, 0.9, 1.0, 0.7, 0.9, 1.0, 0.9]
+    col_positions = [margin_x]
+    for w in widths[:-1]:
+        col_positions.append(col_positions[-1] + w * inch)
+    col_positions.append(margin_x + usable_width)
+
+    header_y = y
+    c.setFillColor(colors.HexColor("#E2E8F0"))
+    c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.HexColor("#0F172A"))
+    col_centers = [col_positions[i] + (col_positions[i+1] - col_positions[i]) / 2 for i in range(len(headers))]
+    for i, h in enumerate(headers):
+        c.drawCentredString(col_centers[i], header_y - 0.1 * inch, h)
+    y = header_y - 0.55 * inch
+
+    c.setFont("Helvetica", 8)
+    line_height = 0.32 * inch
+    row_number = 0
+    for r in rows:
+        row_number += 1
+        if y - line_height < 1.0 * inch:
+            c.showPage()
+            y = height - inch
+            c.setFont("Helvetica", 8)
+
+        customer_name = (r.customer_name or "")[:18]
+        customer_phone = (r.customer_phone or "-")[:12]
+        arrears_date = r.arrears_date.strftime("%d/%m/%Y") if r.arrears_date else "-"
+        values = [
+            str(row_number),
+            customer_name,
+            r.customer_id_number,
+            customer_phone,
+            str(r.loan_id),
+            f"KSh {float(r.original_amount or 0):,.0f}",
+            f"KSh {float(r.remaining_amount or 0):,.2f}",
+            arrears_date,
+        ]
+
+        for i, v in enumerate(values):
+            c.drawCentredString(col_centers[i], y, v)
+        y -= line_height
+
+    if not rows:
+        c.setFont("Helvetica-Oblique", 11)
+        c.setFillColor(colors.HexColor("#6B7280"))
+        c.drawString(margin_x, y, "No overdue balances. Great work! 🎉")
+
+    c.save()
+
+    return FileResponse(
+        filepath,
+        media_type="application/pdf",
+        filename=filename
+    )
+
