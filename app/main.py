@@ -8,18 +8,12 @@ from app.routes import auth_routes, customer_routes, loan_routes, dashboard_rout
 
 app = FastAPI(title="Loan Management System")
 
-# routers
-
-app.include_router(auth_routes.router)
-app.include_router(customer_routes.router)
-app.include_router(loan_routes.router)
-app.include_router(dashboard_routes.router)
-app.include_router(payment_routes.router)
-app.include_router(arrears_routes.router)
-
-
-
-origins = ["http://localhost:3000", "http://127.0.0.1:3000","https://loan-ui-bay.vercel.app"]
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://loan-ui-bay.vercel.app",
+    "https://semedo-loan-ui.vercel.app",
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +23,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Run connection, create tables, and seed first admin
+# routers
+app.include_router(auth_routes.router)
+app.include_router(customer_routes.router)
+app.include_router(loan_routes.router)
+app.include_router(dashboard_routes.router)
+app.include_router(payment_routes.router)
+app.include_router(arrears_routes.router)
+
+
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -39,13 +41,11 @@ async def startup_event():
             await conn.run_sync(Base.metadata.create_all)
             print("✅ Tables created or already exist.")
 
-            # Ensure loans.customer_id references customers.id_number (string)
             try:
                 await conn.execute(text("ALTER TABLE loans MODIFY COLUMN customer_id VARCHAR(30) NOT NULL"))
             except Exception:
                 pass
             try:
-                # Drop existing foreign key if present and recreate referencing id_number
                 await conn.execute(text("ALTER TABLE loans DROP FOREIGN KEY loans_ibfk_1"))
             except Exception:
                 pass
@@ -58,7 +58,6 @@ async def startup_event():
                 print("✅ Dropped 'address' column from customers")
             except Exception:
                 pass
-            # Enforce NOT NULL on id_number; if existing nulls exist, log info
             try:
                 await conn.execute(text("UPDATE customers SET id_number = CONCAT('MISSING-', id) WHERE id_number IS NULL"))
                 await conn.execute(text("ALTER TABLE customers MODIFY COLUMN id_number VARCHAR(30) NOT NULL"))
@@ -66,7 +65,6 @@ async def startup_event():
             except Exception:
                 pass
 
-        # Seed the user if not exists
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(models.User).filter_by(username="admin"))
             user = result.scalar_one_or_none()
@@ -74,11 +72,11 @@ async def startup_event():
             if not user:
                 new_user = models.User(
                     username="admin",
-                    password=hash_password("Admin@123")  # default password
+                    password=hash_password("Admin@123")
                 )
                 session.add(new_user)
                 await session.commit()
-                print(" Admin user created with username='admin' and password='Admin@123'")
+                print("✅ Admin user created with username='admin' and password='Admin@123'")
             else:
                 print("Admin user already exists, skipping seed.")
     except Exception as e:
