@@ -373,10 +373,8 @@ async def download_payments_report(
         c.setFillColor(colors.HexColor(accent))
         c.roundRect(x, y - pill_height, pill_width, pill_height, 8, fill=1, stroke=0)
         c.setFillColor(colors.white)
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(x + 0.15 * inch, y - 0.17 * inch, label)
         c.setFont("Helvetica-Bold", 13)
-        c.drawRightString(x + pill_width - 0.15 * inch, y - 0.17 * inch, value)
+        c.drawCentredString(x + pill_width / 2, y - 0.17 * inch, f"{label}    {value}")
 
     draw_pill(margin_x, "Total Payments", f"KSh {total_payments:,.2f}", "#16A34A")
     draw_pill(margin_x + pill_width + 0.3 * inch, "Payments Count", str(len(rows)), "#1D4ED8")
@@ -397,9 +395,10 @@ async def download_payments_report(
     c.setFillColor(colors.HexColor("#E2E8F0"))
     c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
     c.setFillColor(colors.HexColor("#0F172A"))
+    col_centers = [col_positions[i] + (col_positions[i+1] - col_positions[i]) / 2 for i in range(len(headers))]
     for i, h in enumerate(headers):
-        c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
-    y = header_y - 0.4 * inch
+        c.drawCentredString(col_centers[i], header_y - 0.1 * inch, h)
+    y = header_y - 0.55 * inch
 
     c.setFont("Helvetica", 9)
     line_height = 0.32 * inch
@@ -425,7 +424,7 @@ async def download_payments_report(
         ]
 
         for i, v in enumerate(values):
-            c.drawString(col_positions[i] + 0.05 * inch, y, v)
+            c.drawCentredString(col_centers[i], y, v)
         y -= line_height
 
     if not rows:
