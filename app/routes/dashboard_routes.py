@@ -480,7 +480,7 @@ async def download_overdue_report(
     y = height - 0.8 * inch
 
     # Header bar
-    c.setFillColor(colors.HexColor("#7C2D12"))
+    c.setFillColor(colors.HexColor("#0F172A"))
     c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 18)
@@ -513,9 +513,9 @@ async def download_overdue_report(
     # Table headers
     c.setFont("Helvetica-Bold", 10)
     c.setFillColor(colors.HexColor("#0F172A"))
-    headers = ["#", "Customer", "ID", "Phone", "Loan #", "Original", "Remaining", "Since"]
+    headers = ["#", "Customer", "ID", "Phone", "Original", "Remaining", "Since"]
     usable_width = width - 2 * margin_x
-    widths = [0.35, 1.8, 0.9, 1.0, 0.7, 0.9, 1.0, 0.9]
+    widths = [0.35, 1.9, 0.85, 1.0, 1.0, 1.1, 0.85]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
@@ -547,7 +547,6 @@ async def download_overdue_report(
             customer_name,
             r.customer_id_number,
             customer_phone,
-            str(r.loan_id),
             f"KSh {float(r.original_amount or 0):,.0f}",
             f"KSh {float(r.remaining_amount or 0):,.2f}",
             arrears_date,
@@ -560,7 +559,7 @@ async def download_overdue_report(
     if not rows:
         c.setFont("Helvetica-Oblique", 11)
         c.setFillColor(colors.HexColor("#6B7280"))
-        c.drawString(margin_x, y, "No overdue balances. Great work! 🎉")
+        c.drawString(margin_x, y, "No overdue balances. Great work!")
 
     c.save()
 
