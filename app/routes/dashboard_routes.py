@@ -389,9 +389,9 @@ async def download_payments_report(
     # Table headers
     c.setFont("Helvetica-Bold", 10)
     c.setFillColor(colors.HexColor("#0F172A"))
-    headers = ["#", "Customer", "ID", "Phone", "Amount", "Time"]
+    headers = ["#", "Customer", "ID", "Phone", "Amount", "Time", "Balance"]
     usable_width = width - 2 * margin_x
-    widths = [0.35, 2.1, 1.1, 1.15, 1.0, 0.7]
+    widths = [0.35, 2.1, 1.1, 1.15, 1.0, 0.7, 1.15]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
@@ -426,6 +426,7 @@ async def download_payments_report(
             customer_phone,
             f"KSh {float(r.payment_amount or 0):,.2f}",
             payment_date_eat.strftime("%H:%M"),
+            f"KSh {float(r.remaining_amount or 0):,.2f}",
         ]
 
         for i, v in enumerate(values):
