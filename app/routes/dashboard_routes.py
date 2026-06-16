@@ -386,40 +386,46 @@ async def download_payments_report(
     c.setFont("Helvetica-Bold", 10)
     c.setFillColor(colors.HexColor("#0F172A"))
     headers = ["Time", "Customer", "ID", "Phone", "Amount"]
-    widths = [0.9, 1.6, 1.2, 1.2, 1.1]
+    usable_width = width - 2 * margin_x
+    widths = [0.9, 2.0, 1.0, 1.1, usable_width / inch - (0.9 + 2.0 + 1.0 + 1.1)]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
-    col_positions.append(margin_x + sum(widths) * inch)
+    col_positions.append(margin_x + usable_width)
 
     header_y = y
     c.setFillColor(colors.HexColor("#E2E8F0"))
-    c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, sum(widths) * inch + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
+    c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
     c.setFillColor(colors.HexColor("#0F172A"))
     for i, h in enumerate(headers):
         c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
     y = header_y - 0.4 * inch
 
     c.setFont("Helvetica", 10)
+    line_height = 0.32 * inch
     for r in rows:
-        if y < 1.0 * inch:
+        if y - line_height < 1.0 * inch:
             c.showPage()
             y = height - inch
             c.setFont("Helvetica", 10)
 
         # Convert payment_date from UTC to Africa/Nairobi (UTC+3)
         payment_date_eat = r.payment_date.replace(tzinfo=ZoneInfo('UTC')).astimezone(ZoneInfo('Africa/Nairobi'))
+        customer_name = r.customer_name or ""
+        if len(customer_name) > 30:
+            customer_name = customer_name[:27] + "..."
+        customer_phone = (r.customer_phone or "-")[:12]
         values = [
             payment_date_eat.strftime("%H:%M"),
-            (r.customer_name or "")[:22],
+            customer_name,
             r.customer_id_number,
-            r.customer_phone or "-",
+            customer_phone,
             f"KSh {float(r.payment_amount or 0):,.2f}",
         ]
 
         for i, v in enumerate(values):
             c.drawString(col_positions[i] + 0.05 * inch, y, v)
-        y -= 0.28 * inch
+        y -= line_height
 
     if not rows:
         c.setFont("Helvetica-Oblique", 11)
