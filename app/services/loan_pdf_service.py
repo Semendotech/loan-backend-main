@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional, Tuple
 
 from reportlab.lib import colors
@@ -118,7 +119,7 @@ def generate_loan_receipt(
     c.drawString(
         margin_x,
         height - 0.98 * inch,
-        f"Issued on {datetime.utcnow().strftime('%d %b %Y %H:%M')}",
+        f"Issued on {datetime.now(ZoneInfo('Africa/Nairobi')).strftime('%d %b %Y %H:%M')}",
     )
     c.setFont("Helvetica", 9.5)
     c.drawString(
