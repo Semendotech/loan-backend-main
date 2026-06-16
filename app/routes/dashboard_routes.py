@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, and_, or_, text
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from typing import List, Tuple
 from fastapi.responses import FileResponse
 import os
@@ -400,8 +401,10 @@ async def download_payments_report(
             y = height - inch
             c.setFont("Helvetica", 10)
 
+        # Convert payment_date from UTC to Africa/Nairobi (UTC+3)
+        payment_date_eat = r.payment_date.replace(tzinfo=ZoneInfo('UTC')).astimezone(ZoneInfo('Africa/Nairobi'))
         values = [
-            r.payment_date.strftime("%H:%M"),
+            payment_date_eat.strftime("%H:%M"),
             (r.customer_name or "")[:22],
             r.customer_id_number,
             r.customer_phone or "-",
