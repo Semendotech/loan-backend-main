@@ -120,3 +120,17 @@ class Arrears(Base):
     # Relationships
     loan = orm_relationship("Loan", back_populates="arrears")
     customer = orm_relationship("Customer", back_populates="arrears")
+
+
+class MpesaTransaction(Base):
+    __tablename__ = "mpesa_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trans_id = Column(String(100), unique=True, nullable=False)  # Safaricom transaction ID
+    amount = Column(Float, nullable=False)
+    phone = Column(String(20), nullable=False)  # Customer phone number
+    loan_id = Column(Integer, ForeignKey("loans.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    loan = orm_relationship("Loan")
