@@ -1,5 +1,6 @@
 import re
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -698,7 +699,10 @@ async def generate_customer_report(
             c.setFillColor(colors.HexColor("#2A6F3E"))
             c.drawString(margin_x + 1.6 * inch, y, f"Amount: {i.amount}")
             c.setFillColor(colors.black)
-            c.drawString(margin_x + 3.6 * inch, y, f"Date: {i.payment_date}")
+            # Convert payment_date from UTC to Africa/Nairobi
+            payment_date_eat = i.payment_date.replace(tzinfo=ZoneInfo('UTC')).astimezone(ZoneInfo('Africa/Nairobi'))
+            formatted_date = payment_date_eat.strftime("%d/%m/%Y %H:%M")
+            c.drawString(margin_x + 3.6 * inch, y, f"Date: {formatted_date}")
             y -= 0.2 * inch
 
     c.save()
