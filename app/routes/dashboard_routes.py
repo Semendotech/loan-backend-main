@@ -320,6 +320,9 @@ async def download_payments_report(
     start_of_day_utc = start_of_day_eat.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     end_of_day_utc = end_of_day_eat.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
+    print(f"[REPORT] Payments report request: date_str={date_str}, target_date={target_date}")
+    print(f"[REPORT] UTC range: {start_of_day_utc} to {end_of_day_utc}")
+
     query = """
         SELECT 
             i.id as installment_id,
@@ -341,6 +344,7 @@ async def download_payments_report(
 
     result = await db.execute(text(query), {"start_utc": start_of_day_utc, "end_utc": end_of_day_utc})
     rows = result.fetchall()
+    print(f"[REPORT] Found {len(rows)} payment rows for {target_date}")
 
     filename = f"payments_{target_date.isoformat()}.pdf"
     filepath = os.path.join("reports", filename)
