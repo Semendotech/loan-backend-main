@@ -456,13 +456,12 @@ async def download_overdue_report(
             a.original_amount as original_amount,
             a.remaining_amount as remaining_amount,
             a.arrears_date as arrears_date,
-            l.id as loan_id,
             c.name as customer_name,
             c.id_number as customer_id_number,
             c.phone as customer_phone
         FROM arrears a
         JOIN loans l ON a.loan_id = l.id
-        JOIN customers c ON a.customer_id = c.id_number
+        JOIN customers c ON a.customer_id = c.id
         WHERE a.is_cleared = false
         ORDER BY a.arrears_date ASC
     """
