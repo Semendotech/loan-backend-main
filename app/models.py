@@ -19,6 +19,7 @@ class Customer(Base):
     name = Column(String(100), nullable=False)
     id_number = Column(String(30), unique=True, nullable=False)
     phone = Column(String(20), unique=True, nullable=False)
+    phone_hash = Column(String(64), unique=True, nullable=False, index=True)
     location = Column(String(100))
     profile_image_url = Column(String(512), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

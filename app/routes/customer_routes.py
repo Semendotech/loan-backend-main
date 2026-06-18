@@ -19,6 +19,7 @@ from ..schemas import (
 )
 from typing import List
 from ..auth import get_current_user
+from ..utils import hash_phone, normalize_phone
 
 # For PDF generation
 from reportlab.lib.pagesizes import A4
@@ -368,11 +369,14 @@ async def create_customer(
 ):
     """Create a new customer"""
     # Check uniqueness for id_number and phone
+    # Normalize phone first to ensure consistent uniqueness checks
+    normalized_phone = normalize_phone(customer.phone)
+    
     existing = await db.execute(
         select(Customer).filter(
             or_(
                 Customer.id_number == customer.id_number,
-                Customer.phone == customer.phone,
+                Customer.phone == normalized_phone,
             )
         )
     )
@@ -388,6 +392,12 @@ async def create_customer(
 
     payload = customer.dict()
     payload["profile_image_url"] = _sanitize_image_url(payload.get("profile_image_url"))
+    
+    # CRITICAL: Normalize phone BEFORE hashing for M-Pesa matching
+    # Safaricom matches against customer's normalized phone, so we must hash the same format
+    normalized_phone = normalize_phone(customer.phone)
+    payload["phone"] = normalized_phone
+    payload["phone_hash"] = hash_phone(normalized_phone)
 
     db_customer = Customer(**payload)
     db.add(db_customer)

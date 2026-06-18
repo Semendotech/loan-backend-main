@@ -33,13 +33,8 @@ class MpesaCallbackData(BaseModel):
     BillRefNumber: str
 
 
-def normalize_phone(phone: str) -> str:
-    phone = ''.join(filter(str.isdigit, phone))
-    if phone.startswith('254'):
-        phone = '0' + phone[3:]
-    elif not phone.startswith('0') and len(phone) == 9:
-        phone = '0' + phone
-    return phone
+# normalize_phone moved to utils.py to avoid duplication
+from ..utils import normalize_phone as util_normalize_phone
 
 
 async def send_sms(phone: str, message: str) -> bool:
@@ -123,7 +118,7 @@ async def mpesa_validation(request: Request):
 async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Receive C2B confirmation callback from Safaricom (JSON format).
-    Matches customer by FirstName, sends SMS notification on successful payment.
+    Matches customer by phone_hash (SHA-256 of phone), processes payment, sends SMS.
     """
     timestamp = datetime.utcnow()
 
@@ -135,14 +130,14 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
 
         trans_id = body.get("TransID")
         amount = float(body.get("TransAmount") or 0)
-        first_name = body.get("FirstName", "").upper()
+        msisdn_hash = body.get("MSISDN", "")  # Already hashed by Safaricom (SHA-256)
         bill_ref = body.get("BillRefNumber") or ""
 
-        logger.info(f"Extracted - TransID: {trans_id}, Amount: {amount}, FirstName: {first_name}")
+        logger.info(f"Extracted - TransID: {trans_id}, Amount: {amount}, MSISDN_Hash: {msisdn_hash[:16]}...")
 
-        if not all([trans_id, first_name]):
-            logger.error("Missing required fields")
-            return {"ResultCode": 0, "ResultDesc": "Invalid data"}
+        if not all([trans_id, msisdn_hash, amount > 0]):
+            logger.error(f"Invalid callback data - TransID: {trans_id}, Amount: {amount}, MSISDN: {msisdn_hash[:16] if msisdn_hash else 'NONE'}")
+            return {"ResultCode": 0, "ResultDesc": "Invalid callback data"}
 
         # Prevent duplicate processing
         existing = await db.execute(
@@ -155,20 +150,24 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 "ResultDesc": "Already processed"
             }
 
-        # Match customer by FirstName
+        # Match customer by phone_hash (Safaricom's hashed MSISDN)
+        # Note: Safaricom sends the MSISDN hash; we compare directly
         result = await db.execute(
-            select(models.Customer).where(models.Customer.name.ilike(f"%{first_name}%"))
+            select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
         )
-        customers = result.scalars().all()
+        customer = result.scalar_one_or_none()
 
-        logger.info(f"Found {len(customers)} customer(s) matching '{first_name}'")
+        if customer:
+            logger.info(f"Phone hash lookup: Found customer {customer.name}")
+        else:
+            logger.info(f"Phone hash lookup: No customer found for hash {msisdn_hash[:16]}...")
 
-        if not customers:
+        if not customer:
             logger.warning(
-                f"UNMATCHED PAYMENT - Customer not found:\n"
+                f"UNMATCHED PAYMENT - No customer found for phone hash:\n"
                 f"   TransID: {trans_id}\n"
                 f"   Amount: {amount}\n"
-                f"   FirstName: {first_name}\n"
+                f"   MSISDN_Hash: {msisdn_hash}\n"
                 f"   Timestamp: {timestamp}"
             )
             return {
@@ -176,20 +175,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 "ResultDesc": "Payment received - customer not found in system"
             }
 
-        if len(customers) > 1:
-            logger.warning(
-                f"DUPLICATE NAMES - Multiple matches for '{first_name}':\n"
-                f"   TransID: {trans_id}\n"
-                f"   Amount: {amount}\n"
-                f"   Please review manually!"
-            )
-            return {
-                "ResultCode": 0,
-                "ResultDesc": "Payment received - multiple customers with same name, manual review needed"
-            }
-
-        customer = customers[0]
-        logger.info(f"Customer found: {customer.name} (ID: {customer.id_number})")
+        logger.info(f"Customer matched: {customer.name} (Phone: {customer.phone})")
 
         # Match ACTIVE, OVERDUE, or ARREARS loans
         result = await db.execute(
@@ -243,7 +229,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         mpesa_tx = models.MpesaTransaction(
             trans_id=trans_id,
             amount=amount,
-            phone=customer.name,
+            phone=customer.phone,
             loan_id=loan.id
         )
         db.add(mpesa_tx)

@@ -333,7 +333,16 @@ async def download_payments_report(
             l.remaining_amount as remaining_amount,
             c.name as customer_name,
             c.id_number as customer_id_number,
-            c.phone as customer_phone
+            c.phone as customer_phone,
+            l.id as loan_id,
+            -- Calculate balance AFTER this payment by summing all payments up to and including this one
+            (l.total_amount - 
+             COALESCE((
+                SELECT SUM(i2.amount) 
+                FROM installments i2 
+                WHERE i2.loan_id = l.id 
+                AND i2.payment_date <= i.payment_date
+             ), 0)) as balance_after_payment
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
         JOIN customers c ON l.customer_id = c.id_number
@@ -426,7 +435,7 @@ async def download_payments_report(
             customer_phone,
             f"KSh {float(r.payment_amount or 0):,.2f}",
             payment_date_eat.strftime("%H:%M"),
-            f"KSh {float(r.remaining_amount or 0):,.2f}",
+            f"KSh {float(r.balance_after_payment or 0):,.2f}",
         ]
 
         for i, v in enumerate(values):
