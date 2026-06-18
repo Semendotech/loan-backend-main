@@ -5,6 +5,7 @@ from sqlalchemy import select
 from datetime import datetime
 import logging
 import httpx
+import hashlib
 import re
 import base64
 import os
@@ -140,10 +141,19 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         normalized_msisdn = None if is_hashed_msisdn else util_normalize_phone(raw_msisdn)
         msisdn_hash = raw_msisdn.lower() if is_hashed_msisdn else util_hash_phone(raw_msisdn)
 
+        # Fallback: if raw phone was hashed using international format,
+        # also try the normalized-local version.
+        fallback_hash = None
+        if is_hashed_msisdn:
+            normalized_candidate = util_normalize_phone(raw_msisdn)
+            if normalized_candidate and normalized_candidate != raw_msisdn:
+                fallback_hash = hashlib.sha256(normalized_candidate.encode()).hexdigest()
+
         logger.info(
             f"Extracted - TransID: {trans_id}, Amount: {amount}, "
             f"Raw_MSISDN: {raw_msisdn}, Normalized_MSISDN: {normalized_msisdn}, "
-            f"MSISDN_Hash: {msisdn_hash[:16]}..."
+            f"MSISDN_Hash: {msisdn_hash[:16]}...",
+            extra={"fallback_hash": fallback_hash}
         )
 
         if not all([trans_id, msisdn_hash, amount > 0]):
@@ -165,9 +175,14 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
             }
 
         # Match customer by phone_hash (SHA-256 of normalized customer phone)
-        result = await db.execute(
-            select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
-        )
+        query = select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
+        if fallback_hash:
+            query = select(models.Customer).where(
+                (models.Customer.phone_hash == msisdn_hash) |
+                (models.Customer.phone_hash == fallback_hash)
+            )
+
+        result = await db.execute(query)
         customer = result.scalar_one_or_none()
 
         if customer:
