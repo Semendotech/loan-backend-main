@@ -66,8 +66,13 @@ def upgrade() -> None:
     )
 
     for customer_id, phone in result:
-        normalized = normalize_phone(phone)
-        phone_hash = hash_phone(normalized)
+        try:
+            normalized = normalize_phone(phone)
+            phone_hash = hash_phone(normalized)
+        except ValueError as exc:
+            print(f"Skipping customer {customer_id} ({phone}): {exc}")
+            continue
+
         connection.execute(
             sa.text(
                 "UPDATE customers SET phone = :phone, phone_hash = :phone_hash WHERE id = :id"
