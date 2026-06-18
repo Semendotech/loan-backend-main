@@ -1,8 +1,9 @@
 from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, ForeignKey, Date, Enum
-from sqlalchemy.orm import relationship as orm_relationship
+from sqlalchemy.orm import relationship as orm_relationship, validates
 from datetime import datetime, timedelta
 import enum
 from app.database import Base
+from app.utils.phone import normalize_phone, hash_phone
 
 class User(Base):
     __tablename__ = "users"
@@ -19,7 +20,7 @@ class Customer(Base):
     name = Column(String(100), nullable=False)
     id_number = Column(String(30), unique=True, nullable=False)
     phone = Column(String(20), unique=True, nullable=False)
-    phone_hash = Column(String(64), unique=True, nullable=False, index=True)
+    phone_hash = Column(String(64), unique=True, index=True, nullable=True)
     location = Column(String(100))
     profile_image_url = Column(String(512), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -27,6 +28,13 @@ class Customer(Base):
     # Relationships
     loans = orm_relationship("Loan", back_populates="customer", cascade="all, delete-orphan")
     arrears = orm_relationship("Arrears", back_populates="customer", cascade="all, delete-orphan")
+
+    @validates("phone")
+    def validate_phone(self, key: str, value: str) -> str:
+        """Normalize phone and compute phone_hash whenever phone is set."""
+        normalized = normalize_phone(value)
+        self.phone_hash = hash_phone(normalized)
+        return normalized
 
 class Guarantor(Base):
     __tablename__ = "guarantors"

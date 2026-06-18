@@ -5,7 +5,6 @@ from sqlalchemy import select
 from datetime import datetime
 import logging
 import httpx
-import hashlib
 import re
 import base64
 import os
@@ -35,8 +34,7 @@ class MpesaCallbackData(BaseModel):
     BillRefNumber: str
 
 
-# normalize_phone and hash_phone moved to utils.py to avoid duplication
-from ..utils import normalize_phone as util_normalize_phone, hash_phone as util_hash_phone
+from ..utils.phone import normalize_phone as util_normalize_phone, hash_phone as util_hash_phone
 
 
 async def send_sms(phone: str, message: str) -> bool:
@@ -138,22 +136,21 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         # If Safaricom sends the raw phone number, normalize and hash it.
         # If it sends a pre-computed SHA-256 MSISDN hash, use it directly.
         is_hashed_msisdn = bool(re.fullmatch(r"[0-9a-fA-F]{64}", raw_msisdn))
-        normalized_msisdn = None if is_hashed_msisdn else util_normalize_phone(raw_msisdn)
-        msisdn_hash = raw_msisdn.lower() if is_hashed_msisdn else util_hash_phone(raw_msisdn)
-
-        # Fallback: if raw phone was hashed using international format,
-        # also try the normalized-local version.
-        fallback_hash = None
         if is_hashed_msisdn:
-            normalized_candidate = util_normalize_phone(raw_msisdn)
-            if normalized_candidate and normalized_candidate != raw_msisdn:
-                fallback_hash = hashlib.sha256(normalized_candidate.encode()).hexdigest()
+            normalized_msisdn = None
+            msisdn_hash = raw_msisdn.lower()
+        else:
+            try:
+                normalized_msisdn = util_normalize_phone(raw_msisdn)
+                msisdn_hash = util_hash_phone(normalized_msisdn)
+            except ValueError as exc:
+                logger.error(f"Invalid MSISDN in callback: {raw_msisdn} ({exc})")
+                return {"ResultCode": 0, "ResultDesc": "Invalid phone number"}
 
         logger.info(
             f"Extracted - TransID: {trans_id}, Amount: {amount}, "
             f"Raw_MSISDN: {raw_msisdn}, Normalized_MSISDN: {normalized_msisdn}, "
-            f"MSISDN_Hash: {msisdn_hash[:16]}...",
-            extra={"fallback_hash": fallback_hash}
+            f"MSISDN_Hash: {msisdn_hash[:16]}..."
         )
 
         if not all([trans_id, msisdn_hash, amount > 0]):
@@ -175,14 +172,9 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
             }
 
         # Match customer by phone_hash (SHA-256 of normalized customer phone)
-        query = select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
-        if fallback_hash:
-            query = select(models.Customer).where(
-                (models.Customer.phone_hash == msisdn_hash) |
-                (models.Customer.phone_hash == fallback_hash)
-            )
-
-        result = await db.execute(query)
+        result = await db.execute(
+            select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
+        )
         customer = result.scalar_one_or_none()
 
         if customer:
