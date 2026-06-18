@@ -5,6 +5,7 @@ from sqlalchemy import select
 from datetime import datetime
 import logging
 import httpx
+import re
 import base64
 import os
 import json
@@ -33,8 +34,8 @@ class MpesaCallbackData(BaseModel):
     BillRefNumber: str
 
 
-# normalize_phone moved to utils.py to avoid duplication
-from ..utils import normalize_phone as util_normalize_phone
+# normalize_phone and hash_phone moved to utils.py to avoid duplication
+from ..utils import normalize_phone as util_normalize_phone, hash_phone as util_hash_phone
 
 
 async def send_sms(phone: str, message: str) -> bool:
@@ -130,13 +131,26 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
 
         trans_id = body.get("TransID")
         amount = float(body.get("TransAmount") or 0)
-        msisdn_hash = body.get("MSISDN", "")  # Already hashed by Safaricom (SHA-256)
+        raw_msisdn = body.get("MSISDN", "")
         bill_ref = body.get("BillRefNumber") or ""
 
-        logger.info(f"Extracted - TransID: {trans_id}, Amount: {amount}, MSISDN_Hash: {msisdn_hash[:16]}...")
+        # If Safaricom sends the raw phone number, normalize and hash it.
+        # If it sends a pre-computed SHA-256 MSISDN hash, use it directly.
+        is_hashed_msisdn = bool(re.fullmatch(r"[0-9a-fA-F]{64}", raw_msisdn))
+        normalized_msisdn = None if is_hashed_msisdn else util_normalize_phone(raw_msisdn)
+        msisdn_hash = raw_msisdn.lower() if is_hashed_msisdn else util_hash_phone(raw_msisdn)
+
+        logger.info(
+            f"Extracted - TransID: {trans_id}, Amount: {amount}, "
+            f"Raw_MSISDN: {raw_msisdn}, Normalized_MSISDN: {normalized_msisdn}, "
+            f"MSISDN_Hash: {msisdn_hash[:16]}..."
+        )
 
         if not all([trans_id, msisdn_hash, amount > 0]):
-            logger.error(f"Invalid callback data - TransID: {trans_id}, Amount: {amount}, MSISDN: {msisdn_hash[:16] if msisdn_hash else 'NONE'}")
+            logger.error(
+                f"Invalid callback data - TransID: {trans_id}, Amount: {amount}, "
+                f"Raw_MSISDN: {raw_msisdn}, Normalized_MSISDN: {normalized_msisdn or 'NONE'}"
+            )
             return {"ResultCode": 0, "ResultDesc": "Invalid callback data"}
 
         # Prevent duplicate processing
@@ -150,8 +164,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 "ResultDesc": "Already processed"
             }
 
-        # Match customer by phone_hash (Safaricom's hashed MSISDN)
-        # Note: Safaricom sends the MSISDN hash; we compare directly
+        # Match customer by phone_hash (SHA-256 of normalized customer phone)
         result = await db.execute(
             select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
         )

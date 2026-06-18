@@ -31,9 +31,12 @@ def upgrade() -> None:
     
     # Step 1: Find any customers with NULL phone_hash and backfill them
     result = connection.execute(
-        sa.text("SELECT id, phone FROM customers WHERE phone_hash IS NULL AND phone IS NOT NULL")
+        sa.text("SELECT id, phone FROM customers WHERE phone_hash IS NULL AND phone IS NOT NULL ORDER BY created_at DESC")
     )
     rows = result.fetchall()
+    
+    seen_hashes = set()
+    seen_phones = set()
     
     if rows:
         print(f"Backfilling {len(rows)} customers with NULL phone_hash...")
@@ -41,12 +44,21 @@ def upgrade() -> None:
             customer_id, phone = row
             normalized = normalize_phone(phone)
             phone_hash = hashlib.sha256(normalized.encode()).hexdigest()
+            
+            # Skip if we've already seen this normalized phone (duplicate)
+            if normalized in seen_phones:
+                print(f"Skipping customer {customer_id}: Duplicate phone {normalized}")
+                continue
+            
+            seen_phones.add(normalized)
+            seen_hashes.add(phone_hash)
+            
             connection.execute(
-                sa.text("UPDATE customers SET phone_hash = :hash WHERE id = :id"),
-                {"hash": phone_hash, "id": customer_id}
+                sa.text("UPDATE customers SET phone_hash = :hash, phone = :phone WHERE id = :id"),
+                {"hash": phone_hash, "phone": normalized, "id": customer_id}
             )
     
-    # Step 2: Set any remaining phones to normalized format
+    # Step 2: Normalize remaining phones (should already be normalized from first migration)
     result = connection.execute(sa.text("SELECT id, phone FROM customers WHERE phone IS NOT NULL"))
     rows = result.fetchall()
     
@@ -54,10 +66,16 @@ def upgrade() -> None:
         customer_id, phone = row
         normalized = normalize_phone(phone)
         if normalized != phone:
-            connection.execute(
-                sa.text("UPDATE customers SET phone = :phone WHERE id = :id"),
+            # Only update if the normalized version doesn't already exist
+            check = connection.execute(
+                sa.text("SELECT id FROM customers WHERE phone = :phone AND id != :id"),
                 {"phone": normalized, "id": customer_id}
             )
+            if not check.fetchone():
+                connection.execute(
+                    sa.text("UPDATE customers SET phone = :phone WHERE id = :id"),
+                    {"phone": normalized, "id": customer_id}
+                )
     
     # Step 3: Now make phone_hash NOT NULL
     op.alter_column('customers', 'phone_hash', existing_type=sa.String(length=64), nullable=False)
