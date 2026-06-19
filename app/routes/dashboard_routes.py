@@ -474,9 +474,23 @@ async def download_payments_report(
 async def download_overdue_report(
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
 ):
     """Generate a PDF listing all active overdue balances."""
     eat_zone = ZoneInfo("Africa/Nairobi")
+    date_filter = False
+    query_params: dict[str, date] = {}
+
+    if start_date is not None or end_date is not None:
+        if start_date is None:
+            start_date = end_date
+        elif end_date is None:
+            end_date = start_date
+        if start_date and end_date and start_date > end_date:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+        date_filter = True
+        query_params = {"start_date": start_date, "end_date": end_date}
 
     query = """
         SELECT 
@@ -491,13 +505,21 @@ async def download_overdue_report(
         JOIN loans l ON a.loan_id = l.id
         JOIN customers c ON a.customer_id = c.id
         WHERE a.is_cleared = false
-        ORDER BY a.arrears_date ASC
     """
 
-    result = await db.execute(text(query))
+    if date_filter:
+        query += "\n        AND a.arrears_date >= :start_date\n        AND a.arrears_date <= :end_date"
+
+    query += "\n        ORDER BY a.arrears_date ASC"
+
+    result = await db.execute(text(query), query_params)
     rows = result.fetchall()
 
-    filename = f"overdue_report_{datetime.now(eat_zone).date().isoformat()}.pdf"
+    if date_filter and start_date and end_date:
+        range_suffix = start_date.isoformat() if start_date == end_date else f"{start_date.isoformat()}_{end_date.isoformat()}"
+    else:
+        range_suffix = datetime.now(eat_zone).date().isoformat()
+    filename = f"overdue_report_{range_suffix}.pdf"
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
@@ -639,7 +661,12 @@ async def download_cleared_loans_report(
     )
     loans = result.scalars().all()
 
-    filename = f"cleared_loans_report_{datetime.now(eat_zone).date().isoformat()}.pdf"
+    if start_date is not None or end_date is not None:
+        range_suffix = start_date.isoformat() if start_date == end_date else f"{start_date.isoformat()}_{end_date.isoformat()}"
+    else:
+        range_suffix = datetime.now(eat_zone).date().isoformat()
+
+    filename = f"cleared_loans_report_{range_suffix}.pdf"
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
@@ -991,7 +1018,8 @@ async def download_uncollected_dues_report(
     )
     rows = result.fetchall()
 
-    filename = f"uncollected_dues_report_{today.isoformat()}.pdf"
+    range_suffix = start_date.isoformat() if start_date == end_date else f"{start_date.isoformat()}_{end_date.isoformat()}"
+    filename = f"uncollected_dues_report_{range_suffix}.pdf"
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
