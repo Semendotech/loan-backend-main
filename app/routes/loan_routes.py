@@ -1,7 +1,7 @@
 import logging
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from fastapi import Query
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -17,6 +17,29 @@ from ..services.loan_pdf_service import generate_loan_receipt
 
 router = APIRouter(prefix="/loans", tags=["loans"])
 logger = logging.getLogger(__name__)
+
+
+def _days_to_repay(start_date: date, completed_at: datetime | None) -> int | None:
+    if not completed_at or not start_date:
+        return None
+    cleared_date = completed_at.date() if isinstance(completed_at, datetime) else completed_at
+    return (cleared_date - start_date).days
+
+
+def _serialize_cleared_loan(loan: Loan) -> dict:
+    return {
+        "id": loan.id,
+        "amount": loan.amount,
+        "status": loan.status.value,
+        "start_date": loan.start_date,
+        "completed_at": loan.completed_at,
+        "days_to_repay": _days_to_repay(loan.start_date, loan.completed_at),
+        "customer": {
+            "name": loan.customer.name if loan.customer else None,
+            "id_number": loan.customer_id,
+            "phone": loan.customer.phone if loan.customer else None,
+        },
+    }
 
 @router.post("/", response_model=LoanResponse)
 async def create_loan(loan: LoanCreate, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
@@ -60,19 +83,17 @@ async def create_loan(loan: LoanCreate, db: AsyncSession = Depends(get_db), curr
             detail="Customer has active arrears that must be cleared first"
         )
     
-    # Create guarantor if provided
-    guarantor_id = None
-    if loan.guarantor:
-        db_guarantor = Guarantor(
-            name=loan.guarantor.name,
-            id_number=loan.guarantor.id_number,
-            phone=loan.guarantor.phone,
-            location=loan.guarantor.location,
-            relationship=loan.guarantor.relationship
-        )
-        db.add(db_guarantor)
-        await db.flush()  # Flush to get the guarantor ID
-        guarantor_id = db_guarantor.id
+    # Create guarantor (required)
+    db_guarantor = Guarantor(
+        name=loan.guarantor.name,
+        id_number=loan.guarantor.id_number,
+        phone=loan.guarantor.phone,
+        location=loan.guarantor.location,
+        relationship=loan.guarantor.relationship,
+    )
+    db.add(db_guarantor)
+    await db.flush()
+    guarantor_id = db_guarantor.id
     
     # Create new loan
     db_loan = Loan(
@@ -167,10 +188,13 @@ async def list_active_loans(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    today = date.today()
     base_stmt = (
         select(Loan)
         .options(selectinload(Loan.guarantor), selectinload(Loan.customer))
-        .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]))
+        .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.ARREARS]))
+        .where(Loan.due_date >= today)
+        .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
     )
 
     # 🔍 FILTER FIRST
@@ -210,6 +234,7 @@ async def list_active_loans(
                 "id": l.id,
                 "amount": l.amount,
                 "interest_rate": l.interest_rate,
+                "daily_instalment": (l.amount + (l.amount * l.interest_rate / 100)) / 30,
                 "total_amount": l.total_amount,
                 "remaining_amount": l.remaining_amount,
                 "start_date": l.start_date,
@@ -239,6 +264,71 @@ async def list_active_loans(
         "has_more": len(loans) == limit
     }
 
+
+@router.get("/cleared")
+async def list_cleared_loans(
+    q: str | None = None,
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    limit: int = Query(100, le=500),
+    offset: int = Query(0),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """List cleared/completed loans (fully paid or COMPLETED status)."""
+    cleared_filter = or_(
+        Loan.status == LoanStatus.COMPLETED,
+        and_(Loan.remaining_amount.isnot(None), Loan.remaining_amount <= 0),
+    )
+
+    base_stmt = (
+        select(Loan)
+        .options(selectinload(Loan.customer))
+        .where(cleared_filter)
+    )
+
+    if start_date is not None or end_date is not None:
+        if start_date is None:
+            start_date = end_date
+        elif end_date is None:
+            end_date = start_date
+
+        if start_date and end_date and start_date > end_date:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+
+        start_dt = datetime.combine(start_date, time.min)
+        end_dt = datetime.combine(end_date, time.max)
+        base_stmt = base_stmt.where(Loan.completed_at >= start_dt, Loan.completed_at <= end_dt)
+
+    if q:
+        q = q.strip()
+        base_stmt = base_stmt.join(Customer)
+        filters = [
+            Customer.name.ilike(f"%{q}%"),
+            Customer.phone.ilike(f"%{q}%"),
+            Customer.id_number.ilike(f"%{q}%"),
+        ]
+        if q.isdigit():
+            filters.append(Loan.id == int(q))
+        base_stmt = base_stmt.where(or_(*filters))
+
+    stmt = (
+        base_stmt
+        .order_by(Loan.completed_at.desc(), Loan.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+
+    result = await db.execute(stmt)
+    loans = result.scalars().all()
+
+    return {
+        "items": [_serialize_cleared_loan(loan) for loan in loans],
+        "limit": limit,
+        "offset": offset,
+        "count": len(loans),
+        "has_more": len(loans) == limit,
+    }
 
 
 @router.get("/{loan_id}")

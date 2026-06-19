@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, and_, or_, text
-from datetime import datetime, date, timedelta
+from sqlalchemy import and_, func, or_, text
+from datetime import datetime, date, timedelta, time
 from zoneinfo import ZoneInfo
 from typing import List, Tuple
 from fastapi.responses import FileResponse
@@ -11,12 +11,12 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
+from sqlalchemy.orm import selectinload
 from ..database import get_db
 from ..models import Loan, Customer, Arrears, LoanStatus, Installment
 from ..auth import get_current_user
 from ..services.loan_service import sync_overdue_state
-from datetime import datetime, timedelta, time
-from sqlalchemy import select, func
+from ..services.defaulter_service import get_defaulters
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -89,6 +89,20 @@ def get_week_start_end(today: date) -> Tuple[date, date]:
     week_start = today - timedelta(days=days_since_sunday)
     week_end = week_start + timedelta(days=6)
     return week_start, week_end
+
+
+def _build_utc_range(start_date: date | None, end_date: date | None) -> tuple[datetime | None, datetime | None]:
+    if start_date is None and end_date is None:
+        return None, None
+
+    inclusive_start = start_date or end_date
+    inclusive_end = end_date or start_date
+    if inclusive_start is None or inclusive_end is None:
+        return None, None
+
+    start_dt = datetime.combine(inclusive_start, time.min, tzinfo=ZoneInfo("Africa/Nairobi")).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    end_dt = datetime.combine(inclusive_end, time.max, tzinfo=ZoneInfo("Africa/Nairobi")).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    return start_dt, end_dt
 
 
 @router.get("/summary")
@@ -580,5 +594,503 @@ async def download_overdue_report(
         filepath,
         media_type="application/pdf",
         filename=filename
+    )
+
+
+def _cleared_loan_days_to_repay(start_date: date, completed_at: datetime | None) -> int | None:
+    if not completed_at or not start_date:
+        return None
+    cleared_date = completed_at.date() if isinstance(completed_at, datetime) else completed_at
+    return (cleared_date - start_date).days
+
+
+@router.get("/cleared-loans-report", response_class=FileResponse)
+async def download_cleared_loans_report(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+):
+    """Generate a PDF listing all cleared/completed loans."""
+    eat_zone = ZoneInfo("Africa/Nairobi")
+
+    cleared_filter = or_(
+        Loan.status == LoanStatus.COMPLETED,
+        and_(Loan.remaining_amount.isnot(None), Loan.remaining_amount <= 0),
+    )
+
+    query = select(Loan).options(selectinload(Loan.customer)).where(cleared_filter)
+
+    if start_date is not None or end_date is not None:
+        if start_date is None:
+            start_date = end_date
+        elif end_date is None:
+            end_date = start_date
+
+        if start_date and end_date and start_date > end_date:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+
+        start_dt = datetime.combine(start_date, time.min, tzinfo=eat_zone).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        end_dt = datetime.combine(end_date, time.max, tzinfo=eat_zone).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        query = query.where(Loan.completed_at >= start_dt, Loan.completed_at <= end_dt)
+
+    result = await db.execute(
+        query.order_by(Loan.completed_at.desc(), Loan.created_at.desc())
+    )
+    loans = result.scalars().all()
+
+    filename = f"cleared_loans_report_{datetime.now(eat_zone).date().isoformat()}.pdf"
+    filepath = os.path.join("reports", filename)
+    os.makedirs("reports", exist_ok=True)
+
+    c = canvas.Canvas(filepath, pagesize=A4)
+    width, height = A4
+    margin_x = 0.85 * inch
+    y = height - 0.8 * inch
+
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(margin_x, height - 0.5 * inch, "Cleared Loans Report")
+    c.setFont("Helvetica", 11)
+    c.drawString(
+        margin_x,
+        height - 0.75 * inch,
+        f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
+    )
+
+    y = height - 1.3 * inch
+
+    total_amount = sum(float(loan.amount or 0) for loan in loans)
+    pill_height = 0.45 * inch
+    pill_width = (width - 2 * margin_x - 0.3 * inch) / 2
+
+    def draw_pill(x, label, value, accent):
+        nonlocal y
+        c.setFillColor(colors.HexColor(accent))
+        c.roundRect(x, y - pill_height, pill_width, pill_height, 8, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(x + pill_width / 2, y - 0.15 * inch, label)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawCentredString(x + pill_width / 2, y - 0.32 * inch, value)
+
+    draw_pill(margin_x, "Total Cleared Loans", str(len(loans)), "#16A34A")
+    draw_pill(margin_x + pill_width + 0.3 * inch, "Total Loan Amount", f"KSh {total_amount:,.2f}", "#1D4ED8")
+    y -= pill_height + 0.35 * inch
+
+    headers = ["#", "Customer", "ID", "Phone", "Amount", "Taken", "Cleared", "Days"]
+    usable_width = width - 2 * margin_x
+    widths = [0.3, 1.45, 0.75, 0.95, 0.85, 0.75, 0.75, 0.45]
+    col_positions = [margin_x]
+    for w in widths[:-1]:
+        col_positions.append(col_positions[-1] + w * inch)
+    col_positions.append(margin_x + usable_width)
+
+    header_y = y
+    c.setFillColor(colors.HexColor("#E2E8F0"))
+    c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.setFont("Helvetica-Bold", 9)
+    for i, h in enumerate(headers):
+        c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
+    y = header_y - 0.55 * inch
+
+    c.setFont("Helvetica", 8)
+    line_height = 0.32 * inch
+    row_number = 0
+
+    for loan in loans:
+        row_number += 1
+        if y - line_height < 1.0 * inch:
+            c.showPage()
+            y = height - inch
+            c.setFont("Helvetica", 8)
+
+        customer_name = (loan.customer.name if loan.customer else "")[:16]
+        customer_phone = (loan.customer.phone if loan.customer else "-")[:12]
+        start_label = loan.start_date.strftime("%d/%m/%Y") if loan.start_date else "-"
+        cleared_label = loan.completed_at.strftime("%d/%m/%Y") if loan.completed_at else "-"
+        days_label = (
+            str(_cleared_loan_days_to_repay(loan.start_date, loan.completed_at))
+            if loan.completed_at and loan.start_date
+            else "-"
+        )
+
+        values = [
+            str(row_number),
+            customer_name,
+            loan.customer_id,
+            customer_phone,
+            f"KSh {float(loan.amount or 0):,.0f}",
+            start_label,
+            cleared_label,
+            days_label,
+        ]
+
+        for i, v in enumerate(values):
+            c.drawString(col_positions[i] + 0.05 * inch, y, v)
+        y -= line_height
+
+    if not loans:
+        c.setFont("Helvetica-Oblique", 11)
+        c.setFillColor(colors.HexColor("#6B7280"))
+        c.drawString(margin_x, y, "No cleared loans recorded yet.")
+
+    c.save()
+
+    return FileResponse(
+        filepath,
+        media_type="application/pdf",
+        filename=filename,
+    )
+
+
+@router.get("/defaulters")
+async def list_defaulters(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+):
+    """List customers with 5+ consecutive days without a recorded instalment payment."""
+    items = await get_defaulters(db, reference_date=end_date, min_loan_start_date=start_date)
+    return {
+        "items": items,
+        "count": len(items),
+    }
+
+
+@router.get("/defaulters-report", response_class=FileResponse)
+async def download_defaulters_report(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+):
+    """Generate a PDF listing all defaulters."""
+    eat_zone = ZoneInfo("Africa/Nairobi")
+    report_date = datetime.now(eat_zone).date()
+    items = await get_defaulters(db, reference_date=end_date, min_loan_start_date=start_date)
+
+    range_suffix = report_date.isoformat()
+    if start_date or end_date:
+        if start_date and end_date:
+            range_suffix = f"{start_date.isoformat()}_{end_date.isoformat()}"
+        else:
+            range_suffix = (start_date or end_date).isoformat()
+
+    filename = f"defaulters_report_{range_suffix}.pdf"
+    filepath = os.path.join("reports", filename)
+    os.makedirs("reports", exist_ok=True)
+
+    c = canvas.Canvas(filepath, pagesize=A4)
+    width, height = A4
+    margin_x = 0.85 * inch
+    y = height - 0.8 * inch
+
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(margin_x, height - 0.5 * inch, "Defaulters Report")
+    c.setFont("Helvetica", 11)
+    c.drawString(
+        margin_x,
+        height - 0.75 * inch,
+        f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
+    )
+
+    y = height - 1.3 * inch
+
+    total_balance = sum(float(row["loan_balance"] or 0) for row in items)
+    pill_height = 0.45 * inch
+    pill_width = (width - 2 * margin_x - 0.3 * inch) / 2
+
+    def draw_pill(x, label, value, accent):
+        nonlocal y
+        c.setFillColor(colors.HexColor(accent))
+        c.roundRect(x, y - pill_height, pill_width, pill_height, 8, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(x + pill_width / 2, y - 0.15 * inch, label)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawCentredString(x + pill_width / 2, y - 0.32 * inch, value)
+
+    draw_pill(margin_x, "Total Defaulters", str(len(items)), "#DC2626")
+    draw_pill(margin_x + pill_width + 0.3 * inch, "Total Outstanding", f"KSh {total_balance:,.2f}", "#9333EA")
+    y -= pill_height + 0.35 * inch
+
+    headers = ["#", "Customer", "ID", "Phone", "Balance", "Days"]
+    usable_width = width - 2 * margin_x
+    widths = [0.35, 2.0, 1.0, 1.15, 1.15, 0.65]
+    col_positions = [margin_x]
+    for w in widths[:-1]:
+        col_positions.append(col_positions[-1] + w * inch)
+    col_positions.append(margin_x + usable_width)
+
+    header_y = y
+    c.setFillColor(colors.HexColor("#E2E8F0"))
+    c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.setFont("Helvetica-Bold", 9)
+    for i, h in enumerate(headers):
+        c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
+    y = header_y - 0.55 * inch
+
+    c.setFont("Helvetica", 8)
+    line_height = 0.32 * inch
+    row_number = 0
+
+    for row in items:
+        row_number += 1
+        if y - line_height < 1.0 * inch:
+            c.showPage()
+            y = height - inch
+            c.setFont("Helvetica", 8)
+
+        customer_name = (row.get("customer_name") or "")[:22]
+        customer_phone = (row.get("phone") or "-")[:12]
+        values = [
+            str(row_number),
+            customer_name,
+            row.get("id_number") or "-",
+            customer_phone,
+            f"KSh {float(row.get('loan_balance') or 0):,.2f}",
+            str(row.get("days_defaulted") or 0),
+        ]
+
+        for i, v in enumerate(values):
+            c.drawString(col_positions[i] + 0.05 * inch, y, v)
+        y -= line_height
+
+    if not items:
+        c.setFont("Helvetica-Oblique", 11)
+        c.setFillColor(colors.HexColor("#6B7280"))
+        c.drawString(margin_x, y, "No defaulters recorded.")
+
+    c.save()
+
+    return FileResponse(
+        filepath,
+        media_type="application/pdf",
+        filename=filename,
+    )
+
+
+@router.get("/uncollected-dues")
+async def list_uncollected_dues(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+):
+    """List all active loans with no instalment payment in the requested date range."""
+    eat_zone = ZoneInfo("Africa/Nairobi")
+    if start_date is None and end_date is None:
+        start_date = end_date = datetime.now(eat_zone).date()
+    elif start_date is None:
+        start_date = end_date
+    elif end_date is None:
+        end_date = start_date
+
+    today_start_utc = datetime.combine(start_date, time.min, tzinfo=eat_zone).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    today_end_utc = datetime.combine(end_date, time.max, tzinfo=eat_zone).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+    query = """
+        SELECT 
+            l.id as loan_id,
+            l.amount as loan_amount,
+            l.interest_rate as interest_rate,
+            l.remaining_amount as remaining_amount,
+            c.name as customer_name,
+            c.phone as customer_phone,
+            c.id_number as customer_id_number
+        FROM loans l
+        JOIN customers c ON l.customer_id = c.id_number
+        WHERE l.status IN ('ACTIVE', 'ARREARS')
+        AND l.remaining_amount > 0
+        AND l.id NOT IN (
+            SELECT DISTINCT i.loan_id
+            FROM installments i
+            WHERE i.payment_date >= :today_start
+            AND i.payment_date <= :today_end
+        )
+        ORDER BY c.name ASC
+    """
+
+    result = await db.execute(
+        text(query),
+        {"today_start": today_start_utc, "today_end": today_end_utc}
+    )
+    rows = result.fetchall()
+
+    items = []
+    for r in rows:
+        daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
+        items.append({
+            "loan_id": r.loan_id,
+            "customer_name": r.customer_name,
+            "customer_phone": r.customer_phone,
+            "customer_id_number": r.customer_id_number,
+            "daily_instalment": round(daily_instalment, 2),
+            "loan_balance": round(float(r.remaining_amount or 0), 2),
+        })
+
+    return {
+        "items": items,
+        "count": len(items),
+    }
+
+
+@router.get("/uncollected-dues-report", response_class=FileResponse)
+async def download_uncollected_dues_report(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+):
+    """Generate a PDF listing all uncollected dues."""
+    eat_zone = ZoneInfo("Africa/Nairobi")
+    if start_date is None and end_date is None:
+        start_date = end_date = datetime.now(eat_zone).date()
+    elif start_date is None:
+        start_date = end_date
+    elif end_date is None:
+        end_date = start_date
+
+    today_start_utc = datetime.combine(start_date, time.min, tzinfo=eat_zone).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    today_end_utc = datetime.combine(end_date, time.max, tzinfo=eat_zone).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+    query = """
+        SELECT 
+            l.id as loan_id,
+            l.amount as loan_amount,
+            l.interest_rate as interest_rate,
+            l.remaining_amount as remaining_amount,
+            c.name as customer_name,
+            c.phone as customer_phone,
+            c.id_number as customer_id_number
+        FROM loans l
+        JOIN customers c ON l.customer_id = c.id_number
+        WHERE l.status IN ('ACTIVE', 'ARREARS')
+        AND l.remaining_amount > 0
+        AND l.id NOT IN (
+            SELECT DISTINCT i.loan_id
+            FROM installments i
+            WHERE i.payment_date >= :today_start
+            AND i.payment_date <= :today_end
+        )
+        ORDER BY c.name ASC
+    """
+
+    result = await db.execute(
+        text(query),
+        {"today_start": today_start_utc, "today_end": today_end_utc}
+    )
+    rows = result.fetchall()
+
+    filename = f"uncollected_dues_report_{today.isoformat()}.pdf"
+    filepath = os.path.join("reports", filename)
+    os.makedirs("reports", exist_ok=True)
+
+    c = canvas.Canvas(filepath, pagesize=A4)
+    width, height = A4
+    margin_x = 0.85 * inch
+    y = height - 0.8 * inch
+
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(margin_x, height - 0.5 * inch, "Uncollected Dues Report")
+    c.setFont("Helvetica", 11)
+    c.drawString(
+        margin_x,
+        height - 0.75 * inch,
+        f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
+    )
+
+    y = height - 1.3 * inch
+
+    total_daily_instalments = 0.0
+    total_balance = 0.0
+    for r in rows:
+        daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
+        total_daily_instalments += daily_instalment
+        total_balance += float(r.remaining_amount or 0)
+
+    pill_height = 0.45 * inch
+    pill_width = (width - 2 * margin_x - 0.3 * inch) / 2
+
+    def draw_pill(x, label, value, accent):
+        nonlocal y
+        c.setFillColor(colors.HexColor(accent))
+        c.roundRect(x, y - pill_height, pill_width, pill_height, 8, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(x + pill_width / 2, y - 0.15 * inch, label)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawCentredString(x + pill_width / 2, y - 0.32 * inch, value)
+
+    draw_pill(margin_x, "Uncollected Count", str(len(rows)), "#F59E0B")
+    draw_pill(margin_x + pill_width + 0.3 * inch, "Total Balance", f"KSh {total_balance:,.2f}", "#1D4ED8")
+    y -= pill_height + 0.35 * inch
+
+    headers = ["#", "Customer", "Phone", "Daily Due", "Balance"]
+    usable_width = width - 2 * margin_x
+    widths = [0.35, 2.35, 1.25, 1.15, 1.15]
+    col_positions = [margin_x]
+    for w in widths[:-1]:
+        col_positions.append(col_positions[-1] + w * inch)
+    col_positions.append(margin_x + usable_width)
+
+    header_y = y
+    c.setFillColor(colors.HexColor("#E2E8F0"))
+    c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.setFont("Helvetica-Bold", 9)
+    for i, h in enumerate(headers):
+        c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
+    y = header_y - 0.55 * inch
+
+    c.setFont("Helvetica", 8)
+    line_height = 0.32 * inch
+    row_number = 0
+
+    for r in rows:
+        row_number += 1
+        if y - line_height < 1.0 * inch:
+            c.showPage()
+            y = height - inch
+            c.setFont("Helvetica", 8)
+
+        daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
+        customer_name = (r.customer_name or "")[:22]
+        customer_phone = (r.customer_phone or "-")[:12]
+        values = [
+            str(row_number),
+            customer_name,
+            customer_phone,
+            f"KSh {daily_instalment:,.2f}",
+            f"KSh {float(r.remaining_amount or 0):,.2f}",
+        ]
+
+        for i, v in enumerate(values):
+            c.drawString(col_positions[i] + 0.05 * inch, y, v)
+        y -= line_height
+
+    if not rows:
+        c.setFont("Helvetica-Oblique", 11)
+        c.setFillColor(colors.HexColor("#6B7280"))
+        c.drawString(margin_x, y, "All dues have been collected for today.")
+
+    c.save()
+
+    return FileResponse(
+        filepath,
+        media_type="application/pdf",
+        filename=filename,
     )
 
