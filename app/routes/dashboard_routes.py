@@ -105,6 +105,26 @@ def _build_utc_range(start_date: date | None, end_date: date | None) -> tuple[da
     return start_dt, end_dt
 
 
+def _payment_date_in_eat(payment_date: datetime) -> date:
+    if payment_date.tzinfo is None:
+        payment_date = payment_date.replace(tzinfo=ZoneInfo("UTC"))
+    return payment_date.astimezone(ZoneInfo("Africa/Nairobi")).date()
+
+
+def _count_skipped_days(start_date: date, daily_instalment: float, payments_by_date: dict[date, float], today: date) -> int:
+    expected_total = 0.0
+    paid_total = 0.0
+    skipped_days = 0
+    current = start_date
+    while current <= today:
+        expected_total += daily_instalment
+        paid_total += payments_by_date.get(current, 0.0)
+        if paid_total < expected_total:
+            skipped_days += 1
+        current += timedelta(days=1)
+    return skipped_days
+
+
 @router.get("/summary")
 async def get_dashboard_summary(
     current_user = Depends(get_current_user),
@@ -930,6 +950,7 @@ async def list_uncollected_dues(
             l.id as loan_id,
             l.amount as loan_amount,
             l.interest_rate as interest_rate,
+            l.start_date as start_date,
             l.remaining_amount as remaining_amount,
             c.name as customer_name,
             c.phone as customer_phone,
@@ -953,9 +974,31 @@ async def list_uncollected_dues(
     )
     rows = result.fetchall()
 
+    loan_ids = [r.loan_id for r in rows]
+    payments_by_loan: dict[int, dict[date, float]] = {}
+    if loan_ids:
+        installment_result = await db.execute(
+            select(Installment.loan_id, Installment.amount, Installment.payment_date)
+            .where(Installment.loan_id.in_(loan_ids))
+        )
+        for loan_id, amount, payment_date in installment_result.all():
+            if payment_date is None:
+                continue
+            payment_date_local = _payment_date_in_eat(payment_date)
+            payments_by_loan.setdefault(loan_id, {}).setdefault(payment_date_local, 0.0)
+            payments_by_loan[loan_id][payment_date_local] += float(amount or 0)
+
+    today = datetime.now(eat_zone).date()
     items = []
     for r in rows:
         daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
+        loan_start = r.start_date if r.start_date else today
+        skipped_days = _count_skipped_days(
+            loan_start,
+            daily_instalment,
+            payments_by_loan.get(r.loan_id, {}),
+            today,
+        )
         items.append({
             "loan_id": r.loan_id,
             "customer_name": r.customer_name,
@@ -963,6 +1006,7 @@ async def list_uncollected_dues(
             "customer_id_number": r.customer_id_number,
             "daily_instalment": round(daily_instalment, 2),
             "loan_balance": round(float(r.remaining_amount or 0), 2),
+            "skipped_days": skipped_days,
         })
 
     return {
@@ -995,6 +1039,7 @@ async def download_uncollected_dues_report(
             l.id as loan_id,
             l.amount as loan_amount,
             l.interest_rate as interest_rate,
+            l.start_date as start_date,
             l.remaining_amount as remaining_amount,
             c.name as customer_name,
             c.phone as customer_phone,
@@ -1017,6 +1062,41 @@ async def download_uncollected_dues_report(
         {"today_start": today_start_utc, "today_end": today_end_utc}
     )
     rows = result.fetchall()
+
+    loan_ids = [r.loan_id for r in rows]
+    payments_by_loan: dict[int, dict[date, float]] = {}
+    if loan_ids:
+        installment_result = await db.execute(
+            select(Installment.loan_id, Installment.amount, Installment.payment_date)
+            .where(Installment.loan_id.in_(loan_ids))
+        )
+        for loan_id, amount, payment_date in installment_result.all():
+            if payment_date is None:
+                continue
+            payment_date_local = _payment_date_in_eat(payment_date)
+            payments_by_loan.setdefault(loan_id, {}).setdefault(payment_date_local, 0.0)
+            payments_by_loan[loan_id][payment_date_local] += float(amount or 0)
+
+    today = datetime.now(eat_zone).date()
+    items = []
+    for r in rows:
+        daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
+        loan_start = r.start_date if r.start_date else today
+        skipped_days = _count_skipped_days(
+            loan_start,
+            daily_instalment,
+            payments_by_loan.get(r.loan_id, {}),
+            today,
+        )
+        items.append({
+            "loan_id": r.loan_id,
+            "customer_name": r.customer_name,
+            "customer_phone": r.customer_phone,
+            "customer_id_number": r.customer_id_number,
+            "daily_instalment": round(daily_instalment, 2),
+            "loan_balance": round(float(r.remaining_amount or 0), 2),
+            "skipped_days": skipped_days,
+        })
 
     range_suffix = start_date.isoformat() if start_date == end_date else f"{start_date.isoformat()}_{end_date.isoformat()}"
     filename = f"uncollected_dues_report_{range_suffix}.pdf"
@@ -1066,9 +1146,9 @@ async def download_uncollected_dues_report(
     draw_pill(margin_x + pill_width + 0.3 * inch, "Total Balance", f"KSh {total_balance:,.2f}", "#1D4ED8")
     y -= pill_height + 0.35 * inch
 
-    headers = ["#", "Customer", "Phone", "Daily Due", "Balance"]
+    headers = ["#", "Customer", "Phone", "Daily Due", "Balance", "Skipped Days"]
     usable_width = width - 2 * margin_x
-    widths = [0.35, 2.35, 1.25, 1.15, 1.15]
+    widths = [0.35, 2.05, 1.15, 1.05, 1.05, 0.95]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
@@ -1087,6 +1167,22 @@ async def download_uncollected_dues_report(
     line_height = 0.32 * inch
     row_number = 0
 
+    loan_ids = [r.loan_id for r in rows]
+    payments_by_loan: dict[int, dict[date, float]] = {}
+    if loan_ids:
+        installment_result = await db.execute(
+            select(Installment.loan_id, Installment.amount, Installment.payment_date)
+            .where(Installment.loan_id.in_(loan_ids))
+        )
+        for loan_id, amount, payment_date in installment_result.all():
+            if payment_date is None:
+                continue
+            payment_date_local = _payment_date_in_eat(payment_date)
+            payments_by_loan.setdefault(loan_id, {}).setdefault(payment_date_local, 0.0)
+            payments_by_loan[loan_id][payment_date_local] += float(amount or 0)
+
+    today = datetime.now(eat_zone).date()
+
     for r in rows:
         row_number += 1
         if y - line_height < 1.0 * inch:
@@ -1095,6 +1191,13 @@ async def download_uncollected_dues_report(
             c.setFont("Helvetica", 8)
 
         daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
+        loan_start = r.start_date if r.start_date else today
+        skipped_days = _count_skipped_days(
+            loan_start,
+            daily_instalment,
+            payments_by_loan.get(r.loan_id, {}),
+            today,
+        )
         customer_name = (r.customer_name or "")[:22]
         customer_phone = (r.customer_phone or "-")[:12]
         values = [
@@ -1103,6 +1206,7 @@ async def download_uncollected_dues_report(
             customer_phone,
             f"KSh {daily_instalment:,.2f}",
             f"KSh {float(r.remaining_amount or 0):,.2f}",
+            str(skipped_days),
         ]
 
         for i, v in enumerate(values):
