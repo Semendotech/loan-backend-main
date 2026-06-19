@@ -188,6 +188,14 @@ async def get_dashboard_summary(
     interest_last_three_months = float(interest_res.scalar() or 0.0)
 
     # -----------------------------
+    # Total customers
+    # -----------------------------
+    total_customers_res = await db.execute(
+        select(func.count(Customer.id))
+    )
+    total_customers = int(total_customers_res.scalar() or 0)
+
+    # -----------------------------
     # Overdue records last 3 months
     # -----------------------------
     arrears_last3_res = await db.execute(
@@ -239,12 +247,13 @@ async def get_dashboard_summary(
     total_paid_today = float(daily_payments_res.scalar() or 0.0)
 
     # -----------------------------
-    # Response (UNCHANGED)
+    # Response
     # -----------------------------
     return {
         "completed_loans_amount_this_month": round(completed_loans_amount_this_month, 2),
         "active_loans_count_this_month": active_loans_count_this_month,
         "interest_last_three_months": round(interest_last_three_months, 2),
+        "total_customers": total_customers,
         "overdue_count_last_three_months": arrears_count_last_three_months,
         "arrears_count_last_three_months": arrears_count_last_three_months,
         "total_paid_today": round(total_paid_today, 2),
