@@ -63,20 +63,9 @@ def _run_alembic_migrations() -> None:
     print(f"🔧 Alembic migration target URL configured: {'yes' if db_url else 'no'}")
     command.upgrade(alembic_cfg, "head")
 
-@app.on_event("startup")
-async def startup_event():
+async def _seed_admin_user() -> None:
+    """Create the default admin user if it doesn't exist."""
     try:
-        db_url = os.getenv("DATABASE_URL", "")
-        print(f"🔧 DATABASE_URL configured: {'yes' if db_url else 'no'}")
-        print(f"🔧 database backend: {engine.url.get_backend_name()}")
-
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1"))
-            print("✅ Database connection successful.")
-
-        await asyncio.to_thread(_run_alembic_migrations)
-        print("✅ Alembic migrations applied.")
-
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(models.User).filter_by(username="admin"))
             user = result.scalar_one_or_none()
@@ -92,7 +81,30 @@ async def startup_event():
                 await session.commit()
                 print("✅ Admin user created with username='admin' and password='Admin@123'")
             else:
-                print("Admin user already exists, skipping seed.")
+                print("✅ Admin user already exists, skipping seed.")
+    except Exception as e:
+        print(f"⚠️ Failed to seed admin user: {e}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    try:
+        db_url = os.getenv("DATABASE_URL", "")
+        print(f"🔧 DATABASE_URL configured: {'yes' if db_url else 'no'}")
+        print(f"🔧 database backend: {engine.url.get_backend_name()}")
+
+        async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+            print("✅ Database connection successful.")
+
+        await asyncio.to_thread(_run_alembic_migrations)
+        print("✅ Alembic migrations applied.")
+
+        # Small delay to ensure migration transaction is fully committed
+        await asyncio.sleep(0.5)
+        
+        # Seed the admin user after migrations are fully complete
+        await _seed_admin_user()
     except Exception as e:
         print("❌ Startup error:", e)
 
