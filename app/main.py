@@ -17,6 +17,7 @@ from app.routes.user_routes import router as user_routes
 app = FastAPI(title="Loan Management System")
 
 # CORS configuration for Vercel frontend and local development
+origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
