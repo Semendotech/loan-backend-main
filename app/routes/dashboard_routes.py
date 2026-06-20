@@ -269,55 +269,48 @@ async def get_trends(
     db: AsyncSession = Depends(get_db)
 ):
     """Get returns and interest trends for the last N months"""
-    
-    # Calculate date range
-    end_date = datetime.now().date()
-    start_date = end_date - timedelta(days=months * 30)
-    
-    # Initialize result structure
-    trends = []
-    current = start_date
-    
-    while current <= end_date:
-        # Get month start and end
-        month_start = date(current.year, current.month, 1)
-        if current.month == 12:
-            month_end = date(current.year, 12, 31)
-        else:
-            month_end = date(current.year, current.month + 1, 1) - timedelta(days=1)
-        
-        # Get loans COMPLETED in this month
-        loans_result = await db.execute(
-            select(Loan).filter(
-                and_(
+    try:
+        months = max(1, min(months, 24))
+        end_date = datetime.utcnow().date()
+        start_date = end_date - timedelta(days=months * 30)
+        trends = []
+        current = date(start_date.year, start_date.month, 1)
+
+        while current <= end_date:
+            month_start_dt = datetime.combine(current, time.min)
+            if current.month == 12:
+                next_month = date(current.year + 1, 1, 1)
+            else:
+                next_month = date(current.year, current.month + 1, 1)
+            next_month_dt = datetime.combine(next_month, time.min)
+
+            loans_result = await db.execute(
+                select(Loan).filter(
                     Loan.status == LoanStatus.COMPLETED,
                     Loan.completed_at.isnot(None),
-                    func.date(Loan.completed_at) >= month_start,
-                    func.date(Loan.completed_at) <= month_end,
+                    Loan.completed_at >= month_start_dt,
+                    Loan.completed_at < next_month_dt,
                 )
             )
-        )
-        loans = loans_result.scalars().all()
-        
-        # Calculate returns/interest for completed loans only
-        returns = sum(loan.total_amount for loan in loans)
-        interest = sum((loan.total_amount - loan.amount) for loan in loans)
-        
-        trends.append({
-            "month": current.strftime("%b"),
-            "returns": round(returns, 2),
-            "interest": round(interest, 2)
-        })
-        
-        # Move to next month
-        if current.month == 12:
-            current = date(current.year + 1, 1, 1)
-        else:
-            current = date(current.year, current.month + 1, 1)
-    
-    return {
-        "trends": trends
-    }
+            loans = loans_result.scalars().all()
+
+            returns = sum(loan.total_amount for loan in loans)
+            interest = sum((loan.total_amount - loan.amount) for loan in loans)
+
+            trends.append({
+                "month": current.strftime("%b"),
+                "returns": round(returns, 2),
+                "interest": round(interest, 2),
+            })
+
+            current = next_month
+
+        return {
+            "trends": trends
+        }
+    except Exception as exc:
+        print(f"❌ /dashboard/trends error: {type(exc).__name__}: {exc}")
+        raise
 
 
 @router.get("/recent-activity")

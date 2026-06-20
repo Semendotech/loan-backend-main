@@ -25,11 +25,14 @@ async def logout_route(response: Response):
 
 @router.get("/me")
 async def me_route(current_user: User = Depends(get_current_user)):
+    raw_role = current_user.role
+    print(f"/auth/me raw role value: {raw_role!r}")
+    role_value = raw_role.value if hasattr(raw_role, "value") else str(raw_role)
     return {
         "id": current_user.id,
         "username": current_user.username,
         "first_name": current_user.first_name,
-        "role": current_user.role.value,
+        "role": role_value,
         "created_at": current_user.created_at,
     }
 
