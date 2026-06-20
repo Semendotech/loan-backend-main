@@ -286,17 +286,17 @@ async def get_trends(
             next_month_dt = datetime.combine(next_month, time.min)
 
             loans_result = await db.execute(
-                select(Loan).filter(
+                select(Loan.total_amount, Loan.amount).filter(
                     Loan.status == LoanStatus.COMPLETED,
                     Loan.completed_at.isnot(None),
                     Loan.completed_at >= month_start_dt,
                     Loan.completed_at < next_month_dt,
                 )
             )
-            loans = loans_result.scalars().all()
+            loans = loans_result.all()
 
-            returns = sum(loan.total_amount for loan in loans)
-            interest = sum((loan.total_amount - loan.amount) for loan in loans)
+            returns = sum(row.total_amount for row in loans)
+            interest = sum((row.total_amount - row.amount) for row in loans)
 
             trends.append({
                 "month": current.strftime("%b"),
