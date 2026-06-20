@@ -27,65 +27,66 @@ def normalize_phone(phone: str) -> str:
 
 
 def upgrade() -> None:
-    # Add phone_hash column (nullable initially)
-    op.add_column(
-        'customers',
-        sa.Column('phone_hash', sa.String(length=64), nullable=True)
-    )
-    
-    # Backfill phone_hash by hashing existing phone numbers (after normalizing)
     connection = op.get_bind()
-    
-    # First, drop the unique constraint on phone to allow temporary duplicates during normalization
+    inspector = sa.inspect(connection)
+    columns = {column['name'] for column in inspector.get_columns('customers')}
+    existing_indexes = {idx['name'] for idx in inspector.get_indexes('customers')}
+
+    # Add phone_hash column (nullable initially) if it doesn't exist
+    if 'phone_hash' not in columns:
+        op.add_column(
+            'customers',
+            sa.Column('phone_hash', sa.String(length=64), nullable=True)
+        )
+    else:
+        print('Skipping phone_hash creation; column already exists.')
+
+    # Backfill phone_hash by hashing existing phone numbers (after normalizing)
+    # First, drop the unique constraint or index on phone to allow temporary duplicates during normalization
     try:
-        connection.execute(sa.text("ALTER TABLE customers DROP CONSTRAINT customers_phone_key"))
-    except:
+        connection.execute(sa.text('ALTER TABLE customers DROP CONSTRAINT customers_phone_key'))
+    except Exception:
         try:
-            connection.execute(sa.text("ALTER TABLE customers DROP INDEX customers_phone_key"))
-        except:
-            pass  # Constraint might not exist or have different name
-    
+            connection.execute(sa.text('DROP INDEX customers_phone_key'))
+        except Exception:
+            pass  # Constraint/index might not exist or have different name
+
     # Get all customers ordered by creation date (keep most recent if duplicates)
-    result = connection.execute(sa.text("""
+    result = connection.execute(sa.text('''
         SELECT id, phone FROM customers WHERE phone IS NOT NULL ORDER BY created_at DESC, id DESC
-    """))
-    
+    '''))
+
     seen_normalized_phones = set()
     duplicates_to_delete = []
-    
+
     for row in result:
         customer_id, phone = row
-        # Normalize phone before hashing
         normalized = normalize_phone(phone)
         phone_hash = hashlib.sha256(normalized.encode()).hexdigest()
-        
-        # Track duplicates (keep the first/most recent one seen)
+
         if normalized in seen_normalized_phones:
             duplicates_to_delete.append(customer_id)
             continue
-        
+
         seen_normalized_phones.add(normalized)
-        
-        # Update both phone (normalized) and phone_hash
         connection.execute(
-            sa.text("UPDATE customers SET phone = :phone, phone_hash = :hash WHERE id = :id"),
-            {"phone": normalized, "hash": phone_hash, "id": customer_id}
+            sa.text('UPDATE customers SET phone = :phone, phone_hash = :hash WHERE id = :id'),
+            {'phone': normalized, 'hash': phone_hash, 'id': customer_id}
         )
-    
-    # Delete duplicate customers (keeping only the most recent per normalized phone)
+
     for customer_id in duplicates_to_delete:
-        connection.execute(
-            sa.text("DELETE FROM customers WHERE id = :id"),
-            {"id": customer_id}
-        )
-    
-    # Re-add unique constraint on phone
-    connection.execute(sa.text("""
-        ALTER TABLE customers ADD CONSTRAINT customers_phone_key UNIQUE (phone)
-    """))
-    
-    # Create unique index on phone_hash
-    op.create_index(op.f('ix_customers_phone_hash'), 'customers', ['phone_hash'], unique=True)
+        connection.execute(sa.text('DELETE FROM customers WHERE id = :id'), {'id': customer_id})
+
+    # Re-add unique constraint/index on phone if not already present
+    if 'customers_phone_key' not in existing_indexes:
+        if connection.dialect.name == 'sqlite':
+            connection.execute(sa.text('CREATE UNIQUE INDEX customers_phone_key ON customers(phone)'))
+        else:
+            connection.execute(sa.text('ALTER TABLE customers ADD CONSTRAINT customers_phone_key UNIQUE (phone)'))
+
+    # Create unique index on phone_hash if not already present
+    if op.f('ix_customers_phone_hash') not in existing_indexes:
+        op.create_index(op.f('ix_customers_phone_hash'), 'customers', ['phone_hash'], unique=True)
 
 
 def downgrade() -> None:

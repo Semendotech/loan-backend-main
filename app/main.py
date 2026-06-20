@@ -5,6 +5,7 @@ from app.database import engine, Base, AsyncSessionLocal
 from app import models
 from app.utils import hash_password
 from app.routes import auth_routes, customer_routes, loan_routes, dashboard_routes, payment_routes, arrears_routes, mpesa_routes
+from app.routes.user_routes import router as user_routes
 
 app = FastAPI(title="Loan Management System")
 
@@ -25,6 +26,7 @@ app.add_middleware(
 
 # routers
 app.include_router(auth_routes.router)
+app.include_router(user_routes)
 app.include_router(customer_routes.router)
 app.include_router(loan_routes.router)
 app.include_router(dashboard_routes.router)
@@ -49,7 +51,9 @@ async def startup_event():
             if not user:
                 new_user = models.User(
                     username="admin",
-                    password=hash_password("Admin@123")
+                    first_name="Admin",
+                    password=hash_password("Admin@123"),
+                    role=models.UserRole.ADMIN,
                 )
                 session.add(new_user)
                 await session.commit()

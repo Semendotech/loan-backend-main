@@ -28,11 +28,11 @@ async def me_route(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "username": current_user.username,
+        "first_name": current_user.first_name,
+        "role": current_user.role.value,
+        "created_at": current_user.created_at,
     }
 
-@router.get("/me")
-async def get_me(current_user: User = Depends(get_current_user)):
-    return {"username": current_user.username, "created_at": current_user.created_at}
 
 
 @router.put("/change-password")

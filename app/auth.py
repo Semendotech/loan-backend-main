@@ -1,7 +1,7 @@
 from fastapi import Request, Response, HTTPException, Depends, status
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from app.utils import verify_password, hash_password
-from app.models import User
+from app.models import User, UserRole
 from app.database import AsyncSessionLocal
 from sqlalchemy.future import select
 from app.schemas import LoginRequest, ChangePasswordRequest
@@ -59,15 +59,21 @@ async def login(request: Request, response: Response, username: str, password: s
 
     # Create cookie
     session_token = create_session_cookie(username)
+    secure_cookie = request.url.scheme == "https"
     response.set_cookie(
         key="session_token",
         value=session_token,
         httponly=True,
         max_age=SESSION_EXPIRE_HOURS * 3600,
-        samesite="none",  # ✅ "lax" works well for local testing
-        secure=True     # ✅ Change to True when you deploy with HTTPS
+        samesite="none" if secure_cookie else "lax",
+        secure=secure_cookie,
     )
-    return {"id": user.id, "username": user.username}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "first_name": user.first_name,
+        "role": user.role.value,
+    }
 
 
 async def logout(response: Response):
@@ -93,6 +99,14 @@ async def get_current_user(request: Request, db=Depends(get_db)):
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
+    return user
+
+
+async def get_current_admin(request: Request, db=Depends(get_db)):
+    """Return the currently logged-in admin user."""
+    user = await get_current_user(request, db)
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user
 
 

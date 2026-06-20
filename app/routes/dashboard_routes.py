@@ -371,6 +371,8 @@ async def download_payments_report(
             i.id as installment_id,
             i.amount as payment_amount,
             i.payment_date as payment_date,
+            i.recorded_by as recorded_by,
+            i.source as source,
             l.amount as principal_amount,
             l.total_amount as total_amount,
             l.remaining_amount as remaining_amount,
@@ -441,9 +443,9 @@ async def download_payments_report(
     # Table headers
     c.setFont("Helvetica-Bold", 10)
     c.setFillColor(colors.HexColor("#0F172A"))
-    headers = ["#", "Customer", "ID", "Phone", "Amount", "Time", "Balance"]
+    headers = ["#", "Customer", "ID", "Phone", "Amount", "Time", "Recorded By", "Balance"]
     usable_width = width - 2 * margin_x
-    widths = [0.35, 2.1, 1.1, 1.15, 1.0, 0.7, 1.15]
+    widths = [0.35, 1.8, 0.9, 1.0, 0.95, 0.7, 1.2, 1.0]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
@@ -478,6 +480,7 @@ async def download_payments_report(
             customer_phone,
             f"KSh {float(r.payment_amount or 0):,.2f}",
             payment_date_eat.strftime("%H:%M"),
+            (r.recorded_by or "System") if r.recorded_by else "System",
             f"KSh {float(r.balance_after_payment or 0):,.2f}",
         ]
 

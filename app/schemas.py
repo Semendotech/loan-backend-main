@@ -18,6 +18,44 @@ class ChangePasswordRequest(BaseModel):
 
 
 # ----------------------------------------------------
+# USER SCHEMAS
+# ----------------------------------------------------
+class UserRoleEnum(str, Enum):
+    ADMIN = "admin"
+    LOAN_OFFICER = "loan_officer"
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    first_name: Optional[str] = None
+    role: UserRoleEnum = UserRoleEnum.LOAN_OFFICER
+
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
+    first_name: Optional[str] = None
+    role: Optional[UserRoleEnum] = None
+
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    first_name: Optional[str] = None
+    role: UserRoleEnum
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class RoleResponse(BaseModel):
+    name: str
+    description: str
+
+
+# ----------------------------------------------------
 # ENUMS
 # ----------------------------------------------------
 class LoanStatusEnum(str, Enum):

@@ -78,9 +78,12 @@ def upgrade() -> None:
                 )
     
     # Step 3: Now make phone_hash NOT NULL
-    op.alter_column('customers', 'phone_hash', existing_type=sa.String(length=64), nullable=False)
+    if connection.dialect.name == 'sqlite':
+        print("Skipping phone_hash ALTER NULL/NOT NULL on SQLite; schema already contains phone_hash and SQLite ALTER COLUMN is limited")
+    else:
+        op.alter_column('customers', 'phone_hash', existing_type=sa.String(length=64), nullable=False)
     
-    print("Migration complete: phone_hash is now NOT NULL and all phones are normalized")
+    print("Migration complete: phone_hash update finished")
 
 
 def downgrade() -> None:

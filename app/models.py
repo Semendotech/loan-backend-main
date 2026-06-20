@@ -5,12 +5,18 @@ import enum
 from app.database import Base
 from app.utils.phone import normalize_phone, hash_phone
 
+class UserRole(enum.Enum):
+    ADMIN = "admin"
+    LOAN_OFFICER = "loan_officer"
+
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False)
     password = Column(String(255), nullable=False)
+    first_name = Column(String(50), nullable=True)
+    role = Column(Enum(UserRole), nullable=False, default=UserRole.LOAN_OFFICER)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Customer(Base):
@@ -108,6 +114,8 @@ class Installment(Base):
     loan_id = Column(Integer, ForeignKey("loans.id"), nullable=False)
     amount = Column(Float, nullable=False)
     payment_date = Column(DateTime, default=datetime.utcnow, nullable=False)
+    recorded_by = Column(String(100), nullable=True)
+    source = Column(String(30), nullable=False, default="manual")
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship

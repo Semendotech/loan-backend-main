@@ -470,7 +470,7 @@ async def get_customer_installments(
 ):
     """Return recent installments for a given customer"""
     query = """
-        SELECT i.id, i.amount, i.payment_date, l.id as loan_id
+        SELECT i.id, i.amount, i.payment_date, i.recorded_by, i.source, l.id as loan_id
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
         JOIN customers c ON l.customer_id = c.id_number
@@ -486,6 +486,8 @@ async def get_customer_installments(
             "id": r.id,
             "amount": r.amount,
             "payment_date": r.payment_date,
+            "recorded_by": r.recorded_by or "System",
+            "source": r.source,
             "loan_id": r.loan_id
         }
         for r in rows

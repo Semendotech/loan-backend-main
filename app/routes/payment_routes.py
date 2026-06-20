@@ -91,7 +91,9 @@ async def record_payment(
     installment = Installment(
         loan_id=loan.id,
         amount=payment.amount,
-        payment_date=datetime.utcnow()
+        payment_date=datetime.utcnow(),
+        recorded_by=(current_user.first_name or current_user.username or "User"),
+        source="manual",
     )
     
     db.add(installment)

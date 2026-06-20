@@ -227,7 +227,9 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         installment = models.Installment(
             loan_id=loan.id,
             amount=amount,
-            payment_date=datetime.utcnow()
+            payment_date=datetime.utcnow(),
+            recorded_by="System",
+            source="daraja",
         )
         db.add(installment)
 
