@@ -60,14 +60,15 @@ async def login(request: Request, response: Response, username: str, password: s
 
         # Create cookie
         session_token = create_session_cookie(username)
-        secure_cookie = True
+        secure_cookie = request.url.scheme == "https"
         response.set_cookie(
             key="session_token",
             value=session_token,
             httponly=True,
             max_age=SESSION_EXPIRE_HOURS * 3600,
             samesite="none",
-            secure=True,
+            secure=secure_cookie,
+            path="/",
         )
         
         # Safely extract role value
@@ -88,7 +89,7 @@ async def login(request: Request, response: Response, username: str, password: s
 
 async def logout(response: Response):
     """Clear session cookie."""
-    response.delete_cookie("session_token")
+    response.delete_cookie("session_token", path="/")
     return {"message": "Logged out successfully"}
 
 
