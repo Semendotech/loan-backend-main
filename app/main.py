@@ -43,8 +43,12 @@ app.include_router(mpesa_routes.router)
 
 
 def _run_alembic_migrations() -> None:
-    migrations_dir = Path(__file__).resolve().parents[1] / "alembic"
-    config_path = migrations_dir / "alembic.ini"
+    repo_root = Path(__file__).resolve().parents[1]
+    default_config_path = repo_root / "alembic.ini"
+    config_path = Path(os.getenv("ALEMBIC_CONFIG_PATH", str(default_config_path)))
+    if not config_path.is_absolute():
+        config_path = repo_root / config_path
+
     if not config_path.exists():
         raise FileNotFoundError(f"Alembic config not found at {config_path}")
 
@@ -53,8 +57,9 @@ def _run_alembic_migrations() -> None:
         raise RuntimeError("DATABASE_URL is not set. Set the environment variable before startup.")
 
     alembic_cfg = Config(str(config_path))
-    alembic_cfg.set_main_option("script_location", str(migrations_dir))
+    alembic_cfg.set_main_option("script_location", str(repo_root / "alembic"))
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+    print(f"🔧 Alembic config path: {config_path}")
     print(f"🔧 Alembic migration target URL configured: {'yes' if db_url else 'no'}")
     command.upgrade(alembic_cfg, "head")
 
