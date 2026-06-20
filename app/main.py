@@ -20,6 +20,7 @@ app = FastAPI(title="Loan Management System")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://semedo-loan-ui.vercel.app",
 ]
 allow_origin_regex = r"^https?://([a-zA-Z0-9-]+\.)?vercel\.app$"
 
