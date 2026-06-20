@@ -82,9 +82,11 @@ async def _seed_admin_user() -> None:
                 await session.commit()
                 print("✅ Admin user created with username='admin' and password='Admin@123'")
             else:
-                print("✅ Admin user already exists, skipping seed.")
+                print(f"✅ Admin user already exists: {user.username} (role={user.role})")
     except Exception as e:
-        print(f"⚠️ Failed to seed admin user: {e}")
+        print(f"⚠️ Failed to seed admin user: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 @app.on_event("startup")

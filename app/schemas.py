@@ -47,7 +47,7 @@ class UserResponse(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class RoleResponse(BaseModel):
@@ -85,7 +85,7 @@ class CustomerResponse(CustomerBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class CustomerPhotoUpdate(BaseModel):
@@ -104,7 +104,7 @@ class CustomerCheck(BaseModel):
     customer: Optional[CustomerResponse] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # ----------------------------------------------------
@@ -127,7 +127,7 @@ class GuarantorResponse(GuarantorBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # ----------------------------------------------------
@@ -175,7 +175,7 @@ class LoanResponse(BaseModel):
     document_url: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # ----------------------------------------------------
@@ -189,7 +189,7 @@ class InstallmentResponse(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # ----------------------------------------------------
@@ -207,4 +207,4 @@ class ArrearsResponse(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True

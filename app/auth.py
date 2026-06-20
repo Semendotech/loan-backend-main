@@ -51,29 +51,39 @@ async def get_db():
 
 async def login(request: Request, response: Response, username: str, password: str, db):
     """Login logic that validates credentials and sets a cookie."""
-    result = await db.execute(select(User).filter_by(username=username))
-    user = result.scalar_one_or_none()
+    try:
+        result = await db.execute(select(User).filter_by(username=username))
+        user = result.scalar_one_or_none()
 
-    if not user or not verify_password(password, user.password):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        if not user or not verify_password(password, user.password):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    # Create cookie
-    session_token = create_session_cookie(username)
-    secure_cookie = request.url.scheme == "https"
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        max_age=SESSION_EXPIRE_HOURS * 3600,
-        samesite="none" if secure_cookie else "lax",
-        secure=secure_cookie,
-    )
-    return {
-        "id": user.id,
-        "username": user.username,
-        "first_name": user.first_name,
-        "role": user.role.value,
-    }
+        # Create cookie
+        session_token = create_session_cookie(username)
+        secure_cookie = request.url.scheme == "https"
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            max_age=SESSION_EXPIRE_HOURS * 3600,
+            samesite="none" if secure_cookie else "lax",
+            secure=secure_cookie,
+        )
+        
+        # Safely extract role value
+        role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
+        
+        return {
+            "id": user.id,
+            "username": user.username,
+            "first_name": user.first_name or "",
+            "role": role_value,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Login error for user '{username}': {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 
 async def logout(response: Response):
