@@ -60,14 +60,14 @@ async def login(request: Request, response: Response, username: str, password: s
 
         # Create cookie
         session_token = create_session_cookie(username)
-        secure_cookie = request.url.scheme == "https"
+        secure_cookie = True
         response.set_cookie(
             key="session_token",
             value=session_token,
             httponly=True,
             max_age=SESSION_EXPIRE_HOURS * 3600,
-            samesite="none" if secure_cookie else "lax",
-            secure=secure_cookie,
+            samesite="none",
+            secure=True,
         )
         
         # Safely extract role value
