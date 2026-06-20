@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from typing import List, Tuple
 from fastapi.responses import FileResponse
 import os
+import logging
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib import colors
@@ -308,8 +309,8 @@ async def get_trends(
         return {
             "trends": trends
         }
-    except Exception as exc:
-        print(f"❌ /dashboard/trends error: {type(exc).__name__}: {exc}")
+    except Exception:
+        logging.exception("Unhandled exception in /dashboard/trends")
         raise
 
 

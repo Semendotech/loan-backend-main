@@ -188,81 +188,85 @@ async def list_active_loans(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    today = date.today()
-    base_stmt = (
-        select(Loan)
-        .options(selectinload(Loan.guarantor), selectinload(Loan.customer))
-        .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.ARREARS]))
-        .where(Loan.due_date >= today)
-        .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
-    )
+    try:
+        today = date.today()
+        base_stmt = (
+            select(Loan)
+            .options(selectinload(Loan.guarantor), selectinload(Loan.customer))
+            .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.ARREARS]))
+            .where(Loan.due_date >= today)
+            .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
+        )
 
-    # 🔍 FILTER FIRST
-    if q:
-        q = q.strip()
-        # Always join Customer for search since we need to search customer fields
-        base_stmt = base_stmt.join(Customer)
+        # 🔍 FILTER FIRST
+        if q:
+            q = q.strip()
+            # Always join Customer for search since we need to search customer fields
+            base_stmt = base_stmt.join(Customer)
 
-        # Always allow searching by customer fields (including phone)
-        filters = [
-            Customer.name.ilike(f"%{q}%"),
-            Customer.phone.ilike(f"%{q}%"),
-            Customer.id_number.ilike(f"%{q}%"),
-        ]
+            # Always allow searching by customer fields (including phone)
+            filters = [
+                Customer.name.ilike(f"%{q}%"),
+                Customer.phone.ilike(f"%{q}%"),
+                Customer.id_number.ilike(f"%{q}%"),
+            ]
 
-        # Additionally allow exact loan-id lookup when input is numeric
-        if q.isdigit():
-            filters.append(Loan.id == int(q))
+            # Additionally allow exact loan-id lookup when input is numeric
+            if q.isdigit():
+                filters.append(Loan.id == int(q))
 
-        base_stmt = base_stmt.where(or_(*filters))
+            base_stmt = base_stmt.where(or_(*filters))
 
 
-    # 📄 THEN paginate
-    stmt = (
-        base_stmt
-        .order_by(Loan.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+        # 📄 THEN paginate
+        stmt = (
+            base_stmt
+            .order_by(Loan.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
 
-    result = await db.execute(stmt)
-    loans = result.scalars().all()
+        result = await db.execute(stmt)
+        loans = result.scalars().all()
 
-    return {
-        "items": [
-            {
-                "id": l.id,
-                "amount": l.amount,
-                "interest_rate": l.interest_rate,
-                "daily_instalment": (l.amount + (l.amount * l.interest_rate / 100)) / 30,
-                "total_amount": l.total_amount,
-                "remaining_amount": l.remaining_amount,
-                "start_date": l.start_date,
-                "due_date": l.due_date,
-                "status": l.status.value,
-                "customer": {
-                    "name": l.customer.name if l.customer else None,
-                    "id_number": l.customer_id,
-                    "phone": l.customer.phone if l.customer else None,
-                    "location": l.customer.location if l.customer else None,
-                    "profile_image_url": l.customer.profile_image_url if l.customer else None,
-                },
-                "guarantor": ({
-                    "id": l.guarantor.id,
-                    "name": l.guarantor.name,
-                    "id_number": l.guarantor.id_number,
-                    "phone": l.guarantor.phone,
-                    "location": l.guarantor.location,
-                    "relationship": l.guarantor.relationship,
-                } if l.guarantor else None),
-            }
-            for l in loans
-        ],
-        "limit": limit,
-        "offset": offset,
-        "count": len(loans),
-        "has_more": len(loans) == limit
-    }
+        return {
+            "items": [
+                {
+                    "id": l.id,
+                    "amount": l.amount,
+                    "interest_rate": l.interest_rate,
+                    "daily_instalment": (l.amount + (l.amount * l.interest_rate / 100)) / 30,
+                    "total_amount": l.total_amount,
+                    "remaining_amount": l.remaining_amount,
+                    "start_date": l.start_date,
+                    "due_date": l.due_date,
+                    "status": l.status.value,
+                    "customer": {
+                        "name": l.customer.name if l.customer else None,
+                        "id_number": l.customer_id,
+                        "phone": l.customer.phone if l.customer else None,
+                        "location": l.customer.location if l.customer else None,
+                        "profile_image_url": l.customer.profile_image_url if l.customer else None,
+                    },
+                    "guarantor": ({
+                        "id": l.guarantor.id,
+                        "name": l.guarantor.name,
+                        "id_number": l.guarantor.id_number,
+                        "phone": l.guarantor.phone,
+                        "location": l.guarantor.location,
+                        "relationship": l.guarantor.relationship,
+                    } if l.guarantor else None),
+                }
+                for l in loans
+            ],
+            "limit": limit,
+            "offset": offset,
+            "count": len(loans),
+            "has_more": len(loans) == limit
+        }
+    except Exception:
+        logger.exception("Unhandled exception in /loans/active")
+        raise
 
 
 @router.get("/cleared")
