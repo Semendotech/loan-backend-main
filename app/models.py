@@ -16,7 +16,7 @@ class User(Base):
     username = Column(String(50), unique=True, nullable=False)
     password = Column(String(255), nullable=False)
     first_name = Column(String(50), nullable=True)
-    role = Column(Enum(UserRole), nullable=False, default=UserRole.LOAN_OFFICER)
+    role = Column(Enum(UserRole, values_callable=lambda enum_cls: [e.value for e in enum_cls]), nullable=False, default=UserRole.LOAN_OFFICER)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Customer(Base):
@@ -78,6 +78,7 @@ class Loan(Base):
     status = Column(Enum(LoanStatus), default=LoanStatus.ACTIVE, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
+    arrears_since = Column(DateTime, nullable=True)
     
     # Relationships
     customer = orm_relationship("Customer", back_populates="loans")
