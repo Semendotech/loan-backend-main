@@ -25,9 +25,9 @@ from ..utils.phone import hash_phone, normalize_phone
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib import colors
-from reportlab.pdfgen import canvas
 import os
 
+from ..services.pdf_layout import create_canvas, ensure_space, start_body_y, PAGE_MARGIN
 from ..services.loan_service import (
     compute_weekly_progress,
     loan_is_overdue_by_schedule,
@@ -630,10 +630,10 @@ async def generate_customer_report(
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
-    c = canvas.Canvas(filepath, pagesize=A4)
+    c = create_canvas(filepath)
     width, height = A4
-    margin_x = 1 * inch
-    y = height - 0.8 * inch
+    margin_x = PAGE_MARGIN
+    y = start_body_y(header_height=1.1 * inch)
 
     # Top themed header bar
     c.setFillColor(colors.HexColor("#174064"))
@@ -656,23 +656,20 @@ async def generate_customer_report(
 
     # Reset drawing color for body
     c.setFillColor(colors.black)
-    y = height - 1.4 * inch
+    y = start_body_y(header_height=1.1 * inch)
 
     c.setFont("Helvetica", 12)
-    c.drawString(1 * inch, y, f"ID Number: {customer.id_number}")
+    c.drawString(margin_x, y, f"ID Number: {customer.id_number}")
     y -= 0.25 * inch
-    c.drawString(1 * inch, y, f"Phone: {customer.phone}")
+    c.drawString(margin_x, y, f"Phone: {customer.phone}")
     y -= 0.25 * inch
-    c.drawString(1 * inch, y, f"Location: {customer.location or 'N/A'}")
+    c.drawString(margin_x, y, f"Location: {customer.location or 'N/A'}")
     y -= 0.5 * inch
 
     # Section header helper
     def draw_section_header(label: str):
         nonlocal y
-        if y < 1 * inch:
-            c.showPage()
-            c.setFillColor(colors.black)
-            y = height - inch
+        y = ensure_space(c, y, 0.6 * inch, header_height=1.1 * inch)
         c.setFillColor(colors.HexColor("#E9F0F6"))
         c.setStrokeColor(colors.HexColor("#C5D6E5"))
         c.rect(margin_x - 0.1 * inch, y - 0.15 * inch, width - 2 * margin_x + 0.2 * inch, 0.4 * inch, fill=1, stroke=0)
@@ -686,10 +683,7 @@ async def generate_customer_report(
     # Loans Section
     draw_section_header("Loans Summary")
     for loan in loans:
-        if y < 1 * inch:
-            c.showPage()
-            c.setFillColor(colors.black)
-            y = height - inch
+        y = ensure_space(c, y, 0.6 * inch, header_height=1.1 * inch)
         c.setFont("Helvetica", 11)
         c.drawString(margin_x, y, f"Loan ID: {loan.id}   Status: {loan.status.value}")
         y -= 0.18 * inch
@@ -702,20 +696,16 @@ async def generate_customer_report(
         y -= 0.22 * inch
 
     # Installments Section
-    if y < 1 * inch:
-        c.showPage()
-        c.setFillColor(colors.black)
-        y = height - inch
+    y = ensure_space(c, y, 0.6 * inch)
     draw_section_header("Recent Installments")
 
     if not installments:
+        y = ensure_space(c, y, 0.25 * inch, header_height=1.1 * inch)
         c.drawString(margin_x, y, "No installments available.")
+        y -= 0.2 * inch
     else:
         for i in installments:
-            if y < 1 * inch:
-                c.showPage()
-                c.setFillColor(colors.black)
-                y = height - inch
+            y = ensure_space(c, y, 0.25 * inch, header_height=1.1 * inch)
             c.setFont("Helvetica", 11)
             c.drawString(margin_x, y, f"Loan #{i.loan_id}")
             c.setFillColor(colors.HexColor("#2A6F3E"))
@@ -953,10 +943,10 @@ async def download_loan_statement_pdf(
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
-    c = canvas.Canvas(filepath, pagesize=A4)
+    c = create_canvas(filepath)
     width, height = A4
-    margin_x = 0.85 * inch
-    y = height - 0.8 * inch
+    margin_x = PAGE_MARGIN
+    y = start_body_y()
 
     # Header
     c.setFillColor(colors.HexColor("#0F172A"))
@@ -967,7 +957,7 @@ async def download_loan_statement_pdf(
     c.setFont("Helvetica", 11)
     c.drawString(margin_x, height - 0.75 * inch, f"Statement Period: {start_date} to {end_date}")
 
-    y = height - 1.3 * inch
+    y = start_body_y()
 
     # Customer Info
     c.setFillColor(colors.HexColor("#0F172A"))
@@ -1026,15 +1016,11 @@ async def download_loan_statement_pdf(
     line_height = 0.3 * inch
 
     if not statement_payments:
+        y = ensure_space(c, y, line_height)
         c.drawString(margin_x, y, "No payments in this period")
-        y -= line_height
     else:
         for p in statement_payments:
-            if y - line_height < 1.0 * inch:
-                c.showPage()
-                y = height - inch
-                c.setFont("Helvetica", 8)
-
+            y = ensure_space(c, y, line_height)
             values = [
                 p["date"],
                 f"KSh {p['amount']:,.2f}",
@@ -1047,6 +1033,7 @@ async def download_loan_statement_pdf(
     y -= 0.25 * inch
 
     # Summary
+    y = ensure_space(c, y, 1.1 * inch)
     c.setFillColor(colors.HexColor("#E0F2FE"))
     c.rect(margin_x - 0.08 * inch, y - 1.1 * inch, usable_width + 0.16 * inch, 1.05 * inch, fill=1, stroke=0)
     
@@ -1062,6 +1049,8 @@ async def download_loan_statement_pdf(
     y -= 0.2 * inch
     c.setFillColor(colors.HexColor("#DC2626"))
     c.setFont("Helvetica-Bold", 10)
+    c.drawString(margin_x, y, f"Closing Balance:  KSh {max(0, closing_balance):,.2f}")
+
     c.drawString(margin_x, y, f"Closing Balance:  KSh {max(0, closing_balance):,.2f}")
 
     c.save()

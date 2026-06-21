@@ -9,7 +9,12 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 Base = declarative_base()
 
-engine = create_async_engine(DATABASE_URL, echo=True, future=True)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=True,
+    future=True,
+    connect_args={"ssl": True},
+)
 AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 

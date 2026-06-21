@@ -11,9 +11,9 @@ import logging
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib import colors
-from reportlab.pdfgen import canvas
 from sqlalchemy.orm import selectinload
 from ..database import get_db
+from ..services.pdf_layout import create_canvas, ensure_space, start_body_y, PAGE_MARGIN
 from ..models import Loan, Customer, Arrears, LoanStatus, Installment
 from ..auth import get_current_user
 from ..services.loan_service import sync_overdue_state
@@ -398,10 +398,10 @@ async def download_payments_report(
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
-    c = canvas.Canvas(filepath, pagesize=A4)
+    c = create_canvas(filepath)
     width, height = A4
-    margin_x = 0.85 * inch
-    y = height - 0.8 * inch
+    margin_x = PAGE_MARGIN
+    y = start_body_y()
 
     # Header bar
     c.setFillColor(colors.HexColor("#0F172A"))
@@ -413,7 +413,7 @@ async def download_payments_report(
     c.setFont("Helvetica", 11)
     c.drawString(margin_x, height - 0.75 * inch, f"Date: {target_date.strftime('%B %d, %Y')}")
 
-    y = height - 1.3 * inch
+    y = start_body_y()
 
     # Summary pills
     total_payments = sum(float(r.payment_amount or 0) for r in rows)
@@ -458,10 +458,7 @@ async def download_payments_report(
     row_number = 0
     for r in rows:
         row_number += 1
-        if y - line_height < 1.0 * inch:
-            c.showPage()
-            y = height - inch
-            c.setFont("Helvetica", 9)
+        y = ensure_space(c, y, line_height)
 
         # Convert payment_date from UTC to Africa/Nairobi (UTC+3)
         payment_date_eat = r.payment_date.replace(tzinfo=ZoneInfo('UTC')).astimezone(ZoneInfo('Africa/Nairobi'))
@@ -483,6 +480,7 @@ async def download_payments_report(
         y -= line_height
 
     if not rows:
+        y = ensure_space(c, y, 0.25 * inch)
         c.setFont("Helvetica-Oblique", 11)
         c.setFillColor(colors.HexColor("#6B7280"))
         c.drawString(margin_x, y, "No payments recorded for this date.")
@@ -549,10 +547,10 @@ async def download_overdue_report(
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
-    c = canvas.Canvas(filepath, pagesize=A4)
+    c = create_canvas(filepath)
     width, height = A4
-    margin_x = 0.85 * inch
-    y = height - 0.8 * inch
+    margin_x = PAGE_MARGIN
+    y = start_body_y()
 
     # Header bar
     c.setFillColor(colors.HexColor("#0F172A"))
@@ -564,7 +562,7 @@ async def download_overdue_report(
     c.setFont("Helvetica", 11)
     c.drawString(margin_x, height - 0.75 * inch, f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}")
 
-    y = height - 1.3 * inch
+    y = start_body_y()
 
     # Summary pills
     total_overdue = sum(float(r.remaining_amount or 0) for r in rows)
@@ -609,10 +607,7 @@ async def download_overdue_report(
     row_number = 0
     for r in rows:
         row_number += 1
-        if y - line_height < 1.0 * inch:
-            c.showPage()
-            y = height - inch
-            c.setFont("Helvetica", 8)
+        y = ensure_space(c, y, line_height)
 
         customer_name = (r.customer_name or "")[:18]
         customer_phone = (r.customer_phone or "-")[:12]
@@ -632,6 +627,7 @@ async def download_overdue_report(
         y -= line_height
 
     if not rows:
+        y = ensure_space(c, y, 0.25 * inch)
         c.setFont("Helvetica-Oblique", 11)
         c.setFillColor(colors.HexColor("#6B7280"))
         c.drawString(margin_x, y, "No overdue balances. Great work!")
@@ -696,10 +692,10 @@ async def download_cleared_loans_report(
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
-    c = canvas.Canvas(filepath, pagesize=A4)
+    c = create_canvas(filepath)
     width, height = A4
-    margin_x = 0.85 * inch
-    y = height - 0.8 * inch
+    margin_x = PAGE_MARGIN
+    y = start_body_y()
 
     c.setFillColor(colors.HexColor("#0F172A"))
     c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
@@ -713,7 +709,7 @@ async def download_cleared_loans_report(
         f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
     )
 
-    y = height - 1.3 * inch
+    y = start_body_y()
 
     total_amount = sum(float(loan.amount or 0) for loan in loans)
     pill_height = 0.45 * inch
@@ -756,10 +752,7 @@ async def download_cleared_loans_report(
 
     for loan in loans:
         row_number += 1
-        if y - line_height < 1.0 * inch:
-            c.showPage()
-            y = height - inch
-            c.setFont("Helvetica", 8)
+        y = ensure_space(c, y, line_height)
 
         customer_name = (loan.customer.name if loan.customer else "")[:16]
         customer_phone = (loan.customer.phone if loan.customer else "-")[:12]
@@ -838,10 +831,10 @@ async def download_defaulters_report(
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
-    c = canvas.Canvas(filepath, pagesize=A4)
+    c = create_canvas(filepath)
     width, height = A4
-    margin_x = 0.85 * inch
-    y = height - 0.8 * inch
+    margin_x = PAGE_MARGIN
+    y = start_body_y()
 
     c.setFillColor(colors.HexColor("#0F172A"))
     c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
@@ -855,7 +848,7 @@ async def download_defaulters_report(
         f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
     )
 
-    y = height - 1.3 * inch
+    y = start_body_y()
 
     total_balance = sum(float(row["loan_balance"] or 0) for row in items)
     pill_height = 0.45 * inch
@@ -898,10 +891,7 @@ async def download_defaulters_report(
 
     for row in items:
         row_number += 1
-        if y - line_height < 1.0 * inch:
-            c.showPage()
-            y = height - inch
-            c.setFont("Helvetica", 8)
+        y = ensure_space(c, y, line_height)
 
         customer_name = (row.get("customer_name") or "")[:22]
         customer_phone = (row.get("phone") or "-")[:12]
@@ -1109,10 +1099,10 @@ async def download_uncollected_dues_report(
     filepath = os.path.join("reports", filename)
     os.makedirs("reports", exist_ok=True)
 
-    c = canvas.Canvas(filepath, pagesize=A4)
+    c = create_canvas(filepath)
     width, height = A4
-    margin_x = 0.85 * inch
-    y = height - 0.8 * inch
+    margin_x = PAGE_MARGIN
+    y = start_body_y()
 
     c.setFillColor(colors.HexColor("#0F172A"))
     c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
@@ -1126,7 +1116,7 @@ async def download_uncollected_dues_report(
         f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
     )
 
-    y = height - 1.3 * inch
+    y = start_body_y()
 
     total_daily_instalments = 0.0
     total_balance = 0.0
@@ -1191,10 +1181,7 @@ async def download_uncollected_dues_report(
 
     for r in rows:
         row_number += 1
-        if y - line_height < 1.0 * inch:
-            c.showPage()
-            y = height - inch
-            c.setFont("Helvetica", 8)
+        y = ensure_space(c, y, line_height)
 
         daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
         loan_start = r.start_date if r.start_date else today
