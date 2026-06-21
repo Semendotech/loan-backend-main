@@ -19,8 +19,12 @@ from app import models
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging with force=True to override any existing handlers
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s:%(message)s",
+    force=True
+)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/c2b", tags=["M-Pesa Integration"])
@@ -38,10 +42,6 @@ from ..utils.phone import normalize_phone as util_normalize_phone, hash_phone as
 
 
 async def send_sms(phone: str, message: str) -> bool:
-    """
-    Send SMS via Africa's Talking API (Production).
-    Returns True if successful, False otherwise.
-    """
     try:
         api_key = os.getenv("AFRICAS_TALKING_API_KEY")
         username = os.getenv("AFRICAS_TALKING_USERNAME")
@@ -54,14 +54,12 @@ async def send_sms(phone: str, message: str) -> bool:
             logger.error("AFRICAS_TALKING_USERNAME not configured")
             return False
 
-        # Ensure phone is in international format
         if not phone.startswith('+'):
             if phone.startswith('0'):
                 phone = '+254' + phone[1:]
             else:
                 phone = '+254' + phone
 
-        # PRODUCTION ENDPOINT
         url = "https://api.africastalking.com/version1/messaging"
 
         headers = {
@@ -70,9 +68,6 @@ async def send_sms(phone: str, message: str) -> bool:
             "apiKey": api_key
         }
 
-        # NOTE: "from" (sender_id) is intentionally omitted so AT uses
-        # the default shared shortcode. Add it back once an alphanumeric
-        # sender ID has been approved on your Africa's Talking account.
         payload = {
             "username": username,
             "to": phone,
@@ -99,9 +94,6 @@ async def send_sms(phone: str, message: str) -> bool:
 
 @router.post("/validation")
 async def mpesa_validation(request: Request):
-    """
-    Receive validation request from Safaricom C2B.
-    """
     try:
         body = await request.json()
         logger.info(f"Validation request received: {body}")
@@ -116,14 +108,9 @@ async def mpesa_validation(request: Request):
 
 @router.post("/confirmation")
 async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db)):
-    """
-    Receive C2B confirmation callback from Safaricom (JSON format).
-    Matches customer by phone_hash (SHA-256 of phone), processes payment, sends SMS.
-    """
     timestamp = datetime.utcnow()
 
     try:
-        # Read raw body as JSON
         body = await request.json()
 
         logger.info(f"CALLBACK RECEIVED: {body}")
@@ -133,8 +120,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         raw_msisdn = body.get("MSISDN", "")
         bill_ref = body.get("BillRefNumber") or ""
 
-        # If Safaricom sends the raw phone number, normalize and hash it.
-        # If it sends a pre-computed SHA-256 MSISDN hash, use it directly.
         is_hashed_msisdn = bool(re.fullmatch(r"[0-9a-fA-F]{64}", raw_msisdn))
         if is_hashed_msisdn:
             normalized_msisdn = None
@@ -160,7 +145,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
             )
             return {"ResultCode": 0, "ResultDesc": "Invalid callback data"}
 
-        # Prevent duplicate processing
         existing = await db.execute(
             select(models.MpesaTransaction).where(models.MpesaTransaction.trans_id == trans_id)
         )
@@ -171,7 +155,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 "ResultDesc": "Already processed"
             }
 
-        # Match customer by phone_hash (SHA-256 of normalized customer phone)
         result = await db.execute(
             select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
         )
@@ -197,7 +180,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
 
         logger.info(f"Customer matched: {customer.name} (Phone: {customer.phone})")
 
-        # Match ACTIVE, OVERDUE, or ARREARS loans
         result = await db.execute(
             select(models.Loan).where(
                 (models.Loan.customer_id == customer.id_number) &
@@ -247,7 +229,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 f"   Remaining: {loan.remaining_amount}"
             )
 
-        # Record mpesa transaction to prevent duplicates
         mpesa_tx = models.MpesaTransaction(
             trans_id=trans_id,
             amount=amount,
@@ -267,7 +248,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
             f"   Status: {loan.status.value}"
         )
 
-        # Send SMS notification
         payment_date = datetime.now().strftime("%d/%m/%Y")
         payment_time = datetime.now().strftime("%H:%M")
         sms_message = (
@@ -302,10 +282,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
 
 @router.post("/register-urls")
 async def register_urls():
-    """
-    Register C2B Validation and Confirmation URLs with Safaricom.
-    Uses Store Number 8158739 for receiving callbacks.
-    """
     consumer_key = os.getenv("MPESA_CONSUMER_KEY")
     consumer_secret = os.getenv("MPESA_CONSUMER_SECRET")
     shortcode = "8158739"
@@ -349,10 +325,6 @@ async def register_urls():
 
 @router.post("/simulate")
 async def simulate_payment():
-    """
-    Simulate a C2B payment via Safaricom API (sandbox/production depends on MPESA_BASE_URL).
-    Used for testing only - not for production.
-    """
     consumer_key = os.getenv("MPESA_CONSUMER_KEY")
     consumer_secret = os.getenv("MPESA_CONSUMER_SECRET")
     shortcode = os.getenv("MPESA_SHORTCODE")
