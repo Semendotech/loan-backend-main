@@ -194,7 +194,6 @@ async def list_active_loans(
             select(Loan)
             .options(selectinload(Loan.guarantor), selectinload(Loan.customer))
             .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.ARREARS]))
-            .where(Loan.due_date >= today)
             .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
         )
 
