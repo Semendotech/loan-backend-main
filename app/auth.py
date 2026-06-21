@@ -98,13 +98,14 @@ async def login(request: Request, response: Response, username: str, password: s
         raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
     """Clear session cookie."""
+    secure_cookie = request.url.scheme == "https"
     response.delete_cookie(
         key="session_token",
         path="/",
-        samesite="none",
-        secure=True,
+        samesite="none" if secure_cookie else "lax",
+        secure=secure_cookie,
     )
     return {"message": "Logged out successfully"}
 

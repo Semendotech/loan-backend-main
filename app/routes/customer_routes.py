@@ -185,22 +185,22 @@ async def get_customer_by_id_number(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
     # 🔹 Filter only active (and overdue) loans with guarantor relationship loaded
+    loans_result = await db.execute(
+        select(Loan)
+        .options(selectinload(Loan.guarantor))
+        .filter(
+            Loan.customer_id == customer.id_number,  # customer_id stores id_number
+            Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS])
+        )
+    )
+    loans = loans_result.scalars().all()
+
+    # Fallback: some existing records may have stored the numeric customer.id
+    if not loans:
         loans_result = await db.execute(
-            select(Loan)
-            .options(selectinload(Loan.guarantor))
-            .filter(
-                Loan.customer_id == customer.id_number,  # customer_id stores id_number
-                Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS])
-            )
+            select(Loan).filter(Loan.customer_id == str(customer.id))
         )
         loans = loans_result.scalars().all()
-
-        # Fallback: some existing records may have stored the numeric customer.id
-        if not loans:
-            loans_result = await db.execute(
-                select(Loan).filter(Loan.customer_id == str(customer.id))
-            )
-            loans = loans_result.scalars().all()
     loan_payload = await _serialize_loans_with_progress(db, loans)
 
     # Return the customer and only active loans
@@ -233,21 +233,21 @@ async def get_customer_by_id(
         )
     
     # Get customer loans with guarantor relationship loaded
+    loans_result = await db.execute(
+        select(Loan)
+        .options(selectinload(Loan.guarantor))
+        .filter(Loan.customer_id == customer.id_number)
+    )
+    loans = loans_result.scalars().all()
+
+    # Fallback: try numeric customer.id string if no loans found
+    if not loans:
         loans_result = await db.execute(
-            select(Loan)
-            .options(selectinload(Loan.guarantor))
-            .filter(Loan.customer_id == customer.id_number)
+            select(Loan).filter(Loan.customer_id == str(customer.id))
         )
         loans = loans_result.scalars().all()
 
-        # Fallback: try numeric customer.id string if no loans found
-        if not loans:
-            loans_result = await db.execute(
-                select(Loan).filter(Loan.customer_id == str(customer.id))
-            )
-            loans = loans_result.scalars().all()
-
-        loan = next((l for l in loans if l.status.value in ["ACTIVE", "ARREARS", "OVERDUE"]), loans[0] if loans else None)
+    loan = next((l for l in loans if l.status.value in ["ACTIVE", "ARREARS", "OVERDUE"]), loans[0] if loans else None)
     loan_payload = await _serialize_loans_with_progress(db, loans)
     
     # Get customer arrears
