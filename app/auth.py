@@ -36,6 +36,16 @@ def verify_session_cookie(cookie: str):
         raise HTTPException(status_code=401, detail="Invalid session token")
 
 
+def _extract_session_token(request: Request) -> str | None:
+    token = request.cookies.get("session_token")
+    if token:
+        return token
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return None
+
+
 # ==============================
 # DATABASE DEPENDENCY
 # ==============================
@@ -66,7 +76,7 @@ async def login(request: Request, response: Response, username: str, password: s
             value=session_token,
             httponly=True,
             max_age=SESSION_EXPIRE_HOURS * 3600,
-            samesite="none",
+            samesite="none" if secure_cookie else "lax",
             secure=secure_cookie,
             path="/",
         )
@@ -79,6 +89,7 @@ async def login(request: Request, response: Response, username: str, password: s
             "username": user.username,
             "first_name": user.first_name or "",
             "role": role_value,
+            "access_token": session_token,
         }
     except HTTPException:
         raise
@@ -89,7 +100,12 @@ async def login(request: Request, response: Response, username: str, password: s
 
 async def logout(response: Response):
     """Clear session cookie."""
-    response.delete_cookie("session_token", path="/")
+    response.delete_cookie(
+        key="session_token",
+        path="/",
+        samesite="none",
+        secure=True,
+    )
     return {"message": "Logged out successfully"}
 
 
@@ -98,8 +114,8 @@ async def logout(response: Response):
 # ==============================
 
 async def get_current_user(request: Request, db=Depends(get_db)):
-    """Return the currently logged-in user from session cookie."""
-    session_token = request.cookies.get("session_token")
+    """Return the currently logged-in user from session cookie or bearer token."""
+    session_token = _extract_session_token(request)
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
