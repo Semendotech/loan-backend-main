@@ -101,6 +101,8 @@ async def get_defaulters(
                 "customer_name": loan.customer.name if loan.customer else None,
                 "id_number": loan.customer_id,
                 "phone": loan.customer.phone if loan.customer else None,
+                "loan_amount": float(loan.amount),
+                "date_loan_taken": loan.start_date.isoformat() if loan.start_date else None,
                 "loan_balance": float(remaining or 0),
                 "days_defaulted": days_defaulted,
             }
