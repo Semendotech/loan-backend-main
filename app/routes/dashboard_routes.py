@@ -439,7 +439,7 @@ async def download_payments_report(
     c.setFillColor(colors.HexColor("#0F172A"))
     headers = ["#", "Customer", "ID", "Phone", "Amount", "Time", "Recorded By", "Balance"]
     usable_width = width - 2 * margin_x
-    widths = [0.35, 1.8, 0.9, 1.0, 0.95, 0.7, 1.2, 1.0]
+    widths = [0.25, 0.95, 0.75, 0.85, 0.85, 0.5, 0.75, 0.85]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
