@@ -228,9 +228,10 @@ async def list_active_loans(
         result = await db.execute(stmt)
         loans = result.scalars().all()
 
-        return {
-            "items": [
-                {
+        items = []
+        for l in loans:
+            try:
+                item = {
                     "id": l.id,
                     "amount": l.amount,
                     "interest_rate": l.interest_rate,
@@ -256,12 +257,17 @@ async def list_active_loans(
                         "relationship": l.guarantor.relationship,
                     } if l.guarantor else None),
                 }
-                for l in loans
-            ],
+                items.append(item)
+            except Exception as e:
+                logger.warning(f"Skipping loan {l.id} due to missing customer or guarantor: {e}")
+                continue
+
+        return {
+            "items": items,
             "limit": limit,
             "offset": offset,
-            "count": len(loans),
-            "has_more": len(loans) == limit
+            "count": len(items),
+            "has_more": len(items) == limit
         }
     except Exception:
         logger.exception("Unhandled exception in /loans/active")
