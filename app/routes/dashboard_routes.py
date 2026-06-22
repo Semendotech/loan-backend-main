@@ -330,7 +330,8 @@ async def download_payments_report(
                 SELECT SUM(i2.amount) 
                 FROM installments i2 
                 WHERE i2.loan_id = l.id 
-                AND i2.payment_date <= i.payment_date
+                AND (i2.payment_date < i.payment_date 
+                     OR (i2.payment_date = i.payment_date AND i2.id <= i.id))
              ), 0)) as balance_after_payment
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
