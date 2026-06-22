@@ -119,7 +119,14 @@ async def sync_overdue_state(
         loan.status = LoanStatus.OVERDUE
         changed = True
 
-    if loan.due_date and loan.due_date < ref_date and remaining_amount > 0:
+    # Determine overdue based on days since loan.start_date (single source of truth)
+    is_overdue = False
+    if loan.start_date:
+        days_since_start = (ref_date - loan.start_date).days
+        if days_since_start > 30 and remaining_amount > 0:
+            is_overdue = True
+
+    if is_overdue:
         if loan.status != LoanStatus.OVERDUE:
             loan.status = LoanStatus.OVERDUE
             changed = True
@@ -144,7 +151,8 @@ async def sync_overdue_state(
 
 def loan_is_overdue_by_schedule(loan: Loan, reference_date: Optional[date] = None) -> bool:
     ref_date = reference_date or datetime.utcnow().date()
-    if not loan.due_date:
+    if not loan.start_date:
         return False
-    return loan.due_date < ref_date and _remaining_amount(loan) > 0
+    days_since_start = (ref_date - loan.start_date).days
+    return days_since_start > 30 and _remaining_amount(loan) > 0
 
