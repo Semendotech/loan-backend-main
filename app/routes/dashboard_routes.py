@@ -45,22 +45,17 @@ async def get_dashboard_metrics(
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get dashboard metrics: active loans count and arrears count"""
-    # await _refresh_overdue_states(db)
-    # Active loans (active + overdue)
     active_statuses = [LoanStatus.ACTIVE, LoanStatus.OVERDUE]
     active_loans_count_res = await db.execute(
         select(func.count(Loan.id)).filter(Loan.status.in_(active_statuses))
     )
     active_loans = active_loans_count_res.scalar() or 0
 
-    # Outstanding for active loans should be the sum of remaining_amount
     outstanding_res = await db.execute(
         select(func.coalesce(func.sum(Loan.remaining_amount), 0.0)).filter(Loan.status.in_(active_statuses))
     )
     active_loans_outstanding = float(outstanding_res.scalar() or 0.0)
 
-    # Arrears counts and outstanding
     active_arrears_count_res = await db.execute(
         select(func.count(Arrears.id)).filter(Arrears.is_cleared == False)
     )
@@ -76,16 +71,12 @@ async def get_dashboard_metrics(
         "active_loans_outstanding": round(active_loans_outstanding, 2),
         "overdue_loans": active_arrears,
         "overdue_outstanding": round(arrears_outstanding, 2),
-        # Backwards compatibility keys
         "active_arrears": active_arrears,
         "active_arrears_outstanding": round(arrears_outstanding, 2),
     }
 
 
 def get_week_start_end(today: date) -> Tuple[date, date]:
-    """Get the start (Sunday) and end (Saturday) of the calendar week for a given date."""
-    # Get the day of the week (0 = Monday, 6 = Sunday)
-    # We want Sunday = 0, so we adjust: (today.weekday() + 1) % 7
     days_since_sunday = (today.weekday() + 1) % 7
     week_start = today - timedelta(days=days_since_sunday)
     week_end = week_start + timedelta(days=6)
@@ -133,23 +124,17 @@ async def get_dashboard_summary(
 ):
     today = datetime.utcnow().date()
 
-    # Month range
     month_start_date = today.replace(day=1)
     month_start_dt = datetime.combine(month_start_date, time.min)
     today_end_dt = datetime.combine(today, time.max)
 
-    # Week range (Sunday → Saturday)
     week_start, week_end = get_week_start_end(today)
     week_start_dt = datetime.combine(week_start, time.min)
     week_end_dt = datetime.combine(week_end, time.max)
 
-    # Last 3 months
     last3_start_date = today - timedelta(days=90)
     last3_start_dt = datetime.combine(last3_start_date, time.min)
 
-    # -----------------------------
-    # Completed loans amount (month)
-    # -----------------------------
     completed_res = await db.execute(
         select(func.coalesce(func.sum(Loan.total_amount), 0.0))
         .where(
@@ -161,9 +146,6 @@ async def get_dashboard_summary(
     )
     completed_loans_amount_this_month = float(completed_res.scalar() or 0.0)
 
-    # -----------------------------
-    # Active loans count (this month)
-    # -----------------------------
     active_this_month_res = await db.execute(
         select(func.count(Loan.id))
         .where(
@@ -174,9 +156,6 @@ async def get_dashboard_summary(
     )
     active_loans_count_this_month = int(active_this_month_res.scalar() or 0)
 
-    # -----------------------------
-    # Interest last 3 months
-    # -----------------------------
     interest_res = await db.execute(
         select(func.coalesce(func.sum(Loan.total_amount - Loan.amount), 0.0))
         .where(
@@ -188,17 +167,11 @@ async def get_dashboard_summary(
     )
     interest_last_three_months = float(interest_res.scalar() or 0.0)
 
-    # -----------------------------
-    # Total customers
-    # -----------------------------
     total_customers_res = await db.execute(
         select(func.count(Customer.id))
     )
     total_customers = int(total_customers_res.scalar() or 0)
 
-    # -----------------------------
-    # Overdue records last 3 months
-    # -----------------------------
     arrears_last3_res = await db.execute(
         select(func.count(Arrears.id))
         .where(
@@ -208,9 +181,6 @@ async def get_dashboard_summary(
     )
     arrears_count_last_three_months = int(arrears_last3_res.scalar() or 0)
 
-    # -----------------------------
-    # Payments this week
-    # -----------------------------
     weekly_payments_res = await db.execute(
         select(func.coalesce(func.sum(Installment.amount), 0.0))
         .where(
@@ -220,9 +190,6 @@ async def get_dashboard_summary(
     )
     total_paid_this_week = float(weekly_payments_res.scalar() or 0.0)
 
-    # -----------------------------
-    # Payments this month
-    # -----------------------------
     monthly_payments_res = await db.execute(
         select(func.coalesce(func.sum(Installment.amount), 0.0))
         .where(
@@ -232,9 +199,6 @@ async def get_dashboard_summary(
     )
     total_paid_this_month = float(monthly_payments_res.scalar() or 0.0)
 
-    # -----------------------------
-    # Payments today
-    # -----------------------------
     today_start_dt = datetime.combine(today, time.min)
     today_end_dt = datetime.combine(today, time.max)
 
@@ -247,9 +211,6 @@ async def get_dashboard_summary(
     )
     total_paid_today = float(daily_payments_res.scalar() or 0.0)
 
-    # -----------------------------
-    # Response
-    # -----------------------------
     return {
         "completed_loans_amount_this_month": round(completed_loans_amount_this_month, 2),
         "active_loans_count_this_month": active_loans_count_this_month,
@@ -269,7 +230,6 @@ async def get_trends(
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get returns and interest trends for the last N months"""
     try:
         months = max(1, min(months, 24))
         end_date = datetime.utcnow().date()
@@ -306,9 +266,7 @@ async def get_trends(
 
             current = next_month
 
-        return {
-            "trends": trends
-        }
+        return {"trends": trends}
     except Exception:
         logging.exception("Unhandled exception in /dashboard/trends")
         raise
@@ -320,14 +278,11 @@ async def get_recent_activity(
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get recent loans and payments"""
-    
-    # Get recent loans
     loans_result = await db.execute(
         select(Loan).order_by(Loan.created_at.desc()).limit(limit)
     )
     loans = loans_result.scalars().all()
-    
+
     activities = []
     for loan in loans:
         activities.append({
@@ -338,7 +293,7 @@ async def get_recent_activity(
             "status": loan.status.value,
             "date": loan.created_at
         })
-    
+
     return activities
 
 
@@ -348,7 +303,6 @@ async def download_payments_report(
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate a PDF listing all payments made on a specific date (defaults to today)."""
     eat_zone = ZoneInfo("Africa/Nairobi")
     target_date = datetime.now(eat_zone).date() if not date_str else datetime.strptime(date_str, "%Y-%m-%d").date()
 
@@ -356,9 +310,6 @@ async def download_payments_report(
     end_of_day_eat = datetime.combine(target_date, time.max, tzinfo=eat_zone)
     start_of_day_utc = start_of_day_eat.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     end_of_day_utc = end_of_day_eat.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-
-    print(f"[REPORT] Payments report request: date_str={date_str}, target_date={target_date}")
-    print(f"[REPORT] UTC range: {start_of_day_utc} to {end_of_day_utc}")
 
     query = """
         SELECT 
@@ -374,7 +325,6 @@ async def download_payments_report(
             c.id_number as customer_id_number,
             c.phone as customer_phone,
             l.id as loan_id,
-            -- Calculate balance AFTER this payment by summing all payments up to and including this one
             (l.total_amount - 
              COALESCE((
                 SELECT SUM(i2.amount) 
@@ -392,7 +342,6 @@ async def download_payments_report(
 
     result = await db.execute(text(query), {"start_utc": start_of_day_utc, "end_utc": end_of_day_utc})
     rows = result.fetchall()
-    print(f"[REPORT] Found {len(rows)} payment rows for {target_date}")
 
     filename = f"payments_{target_date.isoformat()}.pdf"
     filepath = os.path.join("reports", filename)
@@ -403,19 +352,16 @@ async def download_payments_report(
     margin_x = PAGE_MARGIN
     y = start_body_y()
 
-    # Header bar
     c.setFillColor(colors.HexColor("#0F172A"))
     c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 18)
-    title = f"Payments Report"
-    c.drawString(margin_x, height - 0.5 * inch, title)
+    c.drawString(margin_x, height - 0.5 * inch, "Payments Report")
     c.setFont("Helvetica", 11)
     c.drawString(margin_x, height - 0.75 * inch, f"Date: {target_date.strftime('%B %d, %Y')}")
 
     y = start_body_y()
 
-    # Summary pills
     total_payments = sum(float(r.payment_amount or 0) for r in rows)
     pill_height = 0.45 * inch
     pill_width = (width - 2 * margin_x - 0.3 * inch) / 2
@@ -434,35 +380,32 @@ async def download_payments_report(
     draw_pill(margin_x + pill_width + 0.3 * inch, "Payments Count", str(len(rows)), "#1D4ED8")
     y -= pill_height + 0.35 * inch
 
-    # Table headers
-    c.setFont("Helvetica-Bold", 10)
-    c.setFillColor(colors.HexColor("#0F172A"))
+    # Fixed column widths to prevent overflow
     headers = ["#", "Customer", "ID", "Phone", "Amount", "Time", "Recorded By", "Balance"]
     usable_width = width - 2 * margin_x
-    widths = [0.25, 0.95, 0.75, 0.85, 0.85, 0.5, 0.75, 0.85]
+    widths = [0.25, 1.45, 0.75, 0.95, 0.75, 0.55, 0.85, 0.9]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
-    col_positions.append(margin_x + usable_width)
 
     header_y = y
     c.setFillColor(colors.HexColor("#E2E8F0"))
     c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
     c.setFillColor(colors.HexColor("#0F172A"))
+    c.setFont("Helvetica-Bold", 9)
     for i, h in enumerate(headers):
         c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
     y = header_y - 0.55 * inch
 
-    c.setFont("Helvetica", 9)
+    c.setFont("Helvetica", 8)
     line_height = 0.32 * inch
     row_number = 0
     for r in rows:
         row_number += 1
         y = ensure_space(c, y, line_height)
 
-        # Convert payment_date from UTC to Africa/Nairobi (UTC+3)
         payment_date_eat = r.payment_date.replace(tzinfo=ZoneInfo('UTC')).astimezone(ZoneInfo('Africa/Nairobi'))
-        customer_name = (r.customer_name or "")[:26]
+        customer_name = (r.customer_name or "")[:20]
         customer_phone = (r.customer_phone or "-")[:12]
         values = [
             str(row_number),
@@ -471,7 +414,7 @@ async def download_payments_report(
             customer_phone,
             f"KSh {float(r.payment_amount or 0):,.2f}",
             payment_date_eat.strftime("%H:%M"),
-            (r.recorded_by or "System") if r.recorded_by else "System",
+            (r.recorded_by or "System"),
             f"KSh {float(r.balance_after_payment or 0):,.2f}",
         ]
 
@@ -487,11 +430,7 @@ async def download_payments_report(
 
     c.save()
 
-    return FileResponse(
-        filepath,
-        media_type="application/pdf",
-        filename=filename
-    )
+    return FileResponse(filepath, media_type="application/pdf", filename=filename)
 
 
 @router.get("/overdue-report", response_class=FileResponse)
@@ -501,7 +440,6 @@ async def download_overdue_report(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
 ):
-    """Generate a PDF listing all active overdue balances."""
     eat_zone = ZoneInfo("Africa/Nairobi")
     date_filter = False
     query_params: dict[str, date] = {}
@@ -552,19 +490,16 @@ async def download_overdue_report(
     margin_x = PAGE_MARGIN
     y = start_body_y()
 
-    # Header bar
     c.setFillColor(colors.HexColor("#0F172A"))
     c.rect(0, height - 1.0 * inch, width, 1.0 * inch, fill=1, stroke=0)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 18)
-    title = f"Overdue Report"
-    c.drawString(margin_x, height - 0.5 * inch, title)
+    c.drawString(margin_x, height - 0.5 * inch, "Overdue Report")
     c.setFont("Helvetica", 11)
     c.drawString(margin_x, height - 0.75 * inch, f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}")
 
     y = start_body_y()
 
-    # Summary pills
     total_overdue = sum(float(r.remaining_amount or 0) for r in rows)
     pill_height = 0.45 * inch
     pill_width = (width - 2 * margin_x - 0.3 * inch) / 2
@@ -583,21 +518,18 @@ async def download_overdue_report(
     draw_pill(margin_x + pill_width + 0.3 * inch, "Overdue Cases", str(len(rows)), "#9333EA")
     y -= pill_height + 0.35 * inch
 
-    # Table headers
-    c.setFont("Helvetica-Bold", 10)
-    c.setFillColor(colors.HexColor("#0F172A"))
     headers = ["#", "Customer", "ID", "Phone", "Original", "Remaining", "Since"]
     usable_width = width - 2 * margin_x
     widths = [0.35, 1.9, 0.85, 1.0, 1.0, 1.1, 0.85]
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
-    col_positions.append(margin_x + usable_width)
 
     header_y = y
     c.setFillColor(colors.HexColor("#E2E8F0"))
     c.rect(margin_x - 0.08 * inch, header_y - 0.3 * inch, usable_width + 0.16 * inch, 0.35 * inch, fill=1, stroke=0)
     c.setFillColor(colors.HexColor("#0F172A"))
+    c.setFont("Helvetica-Bold", 9)
     for i, h in enumerate(headers):
         c.drawString(col_positions[i] + 0.05 * inch, header_y - 0.1 * inch, h)
     y = header_y - 0.55 * inch
@@ -634,11 +566,7 @@ async def download_overdue_report(
 
     c.save()
 
-    return FileResponse(
-        filepath,
-        media_type="application/pdf",
-        filename=filename
-    )
+    return FileResponse(filepath, media_type="application/pdf", filename=filename)
 
 
 def _cleared_loan_days_to_repay(start_date: date, completed_at: datetime | None) -> int | None:
@@ -655,7 +583,6 @@ async def download_cleared_loans_report(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
 ):
-    """Generate a PDF listing all cleared/completed loans."""
     eat_zone = ZoneInfo("Africa/Nairobi")
 
     cleared_filter = or_(
@@ -703,11 +630,7 @@ async def download_cleared_loans_report(
     c.setFont("Helvetica-Bold", 18)
     c.drawString(margin_x, height - 0.5 * inch, "Cleared Loans Report")
     c.setFont("Helvetica", 11)
-    c.drawString(
-        margin_x,
-        height - 0.75 * inch,
-        f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
-    )
+    c.drawString(margin_x, height - 0.75 * inch, f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}")
 
     y = start_body_y()
 
@@ -735,7 +658,6 @@ async def download_cleared_loans_report(
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
-    col_positions.append(margin_x + usable_width)
 
     header_y = y
     c.setFillColor(colors.HexColor("#E2E8F0"))
@@ -786,11 +708,7 @@ async def download_cleared_loans_report(
 
     c.save()
 
-    return FileResponse(
-        filepath,
-        media_type="application/pdf",
-        filename=filename,
-    )
+    return FileResponse(filepath, media_type="application/pdf", filename=filename)
 
 
 @router.get("/defaulters")
@@ -800,7 +718,6 @@ async def list_defaulters(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
 ):
-    """List customers with 5+ consecutive days without a recorded instalment payment."""
     items = await get_defaulters(db, reference_date=end_date, min_loan_start_date=start_date)
     return {
         "items": items,
@@ -815,7 +732,6 @@ async def download_defaulters_report(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
 ):
-    """Generate a PDF listing all defaulters."""
     eat_zone = ZoneInfo("Africa/Nairobi")
     report_date = datetime.now(eat_zone).date()
     items = await get_defaulters(db, reference_date=end_date, min_loan_start_date=start_date)
@@ -842,11 +758,7 @@ async def download_defaulters_report(
     c.setFont("Helvetica-Bold", 18)
     c.drawString(margin_x, height - 0.5 * inch, "Defaulters Report")
     c.setFont("Helvetica", 11)
-    c.drawString(
-        margin_x,
-        height - 0.75 * inch,
-        f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
-    )
+    c.drawString(margin_x, height - 0.75 * inch, f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}")
 
     y = start_body_y()
 
@@ -874,7 +786,6 @@ async def download_defaulters_report(
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
-    col_positions.append(margin_x + usable_width)
 
     header_y = y
     c.setFillColor(colors.HexColor("#E2E8F0"))
@@ -915,11 +826,7 @@ async def download_defaulters_report(
 
     c.save()
 
-    return FileResponse(
-        filepath,
-        media_type="application/pdf",
-        filename=filename,
-    )
+    return FileResponse(filepath, media_type="application/pdf", filename=filename)
 
 
 @router.get("/uncollected-dues")
@@ -929,7 +836,6 @@ async def list_uncollected_dues(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
 ):
-    """List all active loans with no instalment payment in the requested date range."""
     eat_zone = ZoneInfo("Africa/Nairobi")
     if start_date is None and end_date is None:
         start_date = end_date = datetime.now(eat_zone).date()
@@ -964,10 +870,7 @@ async def list_uncollected_dues(
         ORDER BY c.name ASC
     """
 
-    result = await db.execute(
-        text(query),
-        {"today_start": today_start_utc, "today_end": today_end_utc}
-    )
+    result = await db.execute(text(query), {"today_start": today_start_utc, "today_end": today_end_utc})
     rows = result.fetchall()
 
     loan_ids = [r.loan_id for r in rows]
@@ -989,12 +892,7 @@ async def list_uncollected_dues(
     for r in rows:
         daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
         loan_start = r.start_date if r.start_date else today
-        skipped_days = _count_skipped_days(
-            loan_start,
-            daily_instalment,
-            payments_by_loan.get(r.loan_id, {}),
-            today,
-        )
+        skipped_days = _count_skipped_days(loan_start, daily_instalment, payments_by_loan.get(r.loan_id, {}), today)
         items.append({
             "loan_id": r.loan_id,
             "customer_name": r.customer_name,
@@ -1005,10 +903,7 @@ async def list_uncollected_dues(
             "skipped_days": skipped_days,
         })
 
-    return {
-        "items": items,
-        "count": len(items),
-    }
+    return {"items": items, "count": len(items)}
 
 
 @router.get("/uncollected-dues-report", response_class=FileResponse)
@@ -1018,7 +913,6 @@ async def download_uncollected_dues_report(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
 ):
-    """Generate a PDF listing all uncollected dues."""
     eat_zone = ZoneInfo("Africa/Nairobi")
     if start_date is None and end_date is None:
         start_date = end_date = datetime.now(eat_zone).date()
@@ -1053,10 +947,7 @@ async def download_uncollected_dues_report(
         ORDER BY c.name ASC
     """
 
-    result = await db.execute(
-        text(query),
-        {"today_start": today_start_utc, "today_end": today_end_utc}
-    )
+    result = await db.execute(text(query), {"today_start": today_start_utc, "today_end": today_end_utc})
     rows = result.fetchall()
 
     loan_ids = [r.loan_id for r in rows]
@@ -1078,12 +969,7 @@ async def download_uncollected_dues_report(
     for r in rows:
         daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
         loan_start = r.start_date if r.start_date else today
-        skipped_days = _count_skipped_days(
-            loan_start,
-            daily_instalment,
-            payments_by_loan.get(r.loan_id, {}),
-            today,
-        )
+        skipped_days = _count_skipped_days(loan_start, daily_instalment, payments_by_loan.get(r.loan_id, {}), today)
         items.append({
             "loan_id": r.loan_id,
             "customer_name": r.customer_name,
@@ -1110,21 +996,11 @@ async def download_uncollected_dues_report(
     c.setFont("Helvetica-Bold", 18)
     c.drawString(margin_x, height - 0.5 * inch, "Uncollected Dues Report")
     c.setFont("Helvetica", 11)
-    c.drawString(
-        margin_x,
-        height - 0.75 * inch,
-        f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}",
-    )
+    c.drawString(margin_x, height - 0.75 * inch, f"Generated: {datetime.now(eat_zone).strftime('%B %d, %Y %H:%M')}")
 
     y = start_body_y()
 
-    total_daily_instalments = 0.0
-    total_balance = 0.0
-    for r in rows:
-        daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
-        total_daily_instalments += daily_instalment
-        total_balance += float(r.remaining_amount or 0)
-
+    total_balance = sum(float(r.remaining_amount or 0) for r in rows)
     pill_height = 0.45 * inch
     pill_width = (width - 2 * margin_x - 0.3 * inch) / 2
 
@@ -1148,7 +1024,6 @@ async def download_uncollected_dues_report(
     col_positions = [margin_x]
     for w in widths[:-1]:
         col_positions.append(col_positions[-1] + w * inch)
-    col_positions.append(margin_x + usable_width)
 
     header_y = y
     c.setFillColor(colors.HexColor("#E2E8F0"))
@@ -1163,34 +1038,13 @@ async def download_uncollected_dues_report(
     line_height = 0.32 * inch
     row_number = 0
 
-    loan_ids = [r.loan_id for r in rows]
-    payments_by_loan: dict[int, dict[date, float]] = {}
-    if loan_ids:
-        installment_result = await db.execute(
-            select(Installment.loan_id, Installment.amount, Installment.payment_date)
-            .where(Installment.loan_id.in_(loan_ids))
-        )
-        for loan_id, amount, payment_date in installment_result.all():
-            if payment_date is None:
-                continue
-            payment_date_local = _payment_date_in_eat(payment_date)
-            payments_by_loan.setdefault(loan_id, {}).setdefault(payment_date_local, 0.0)
-            payments_by_loan[loan_id][payment_date_local] += float(amount or 0)
-
-    today = datetime.now(eat_zone).date()
-
     for r in rows:
         row_number += 1
         y = ensure_space(c, y, line_height)
 
         daily_instalment = (float(r.loan_amount or 0) + (float(r.loan_amount or 0) * float(r.interest_rate or 0) / 100)) / 30
         loan_start = r.start_date if r.start_date else today
-        skipped_days = _count_skipped_days(
-            loan_start,
-            daily_instalment,
-            payments_by_loan.get(r.loan_id, {}),
-            today,
-        )
+        skipped_days = _count_skipped_days(loan_start, daily_instalment, payments_by_loan.get(r.loan_id, {}), today)
         customer_name = (r.customer_name or "")[:22]
         customer_phone = (r.customer_phone or "-")[:12]
         values = [
@@ -1213,9 +1067,4 @@ async def download_uncollected_dues_report(
 
     c.save()
 
-    return FileResponse(
-        filepath,
-        media_type="application/pdf",
-        filename=filename,
-    )
-
+    return FileResponse(filepath, media_type="application/pdf", filename=filename)
