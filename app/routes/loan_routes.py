@@ -14,9 +14,28 @@ from ..models import Loan, Customer, LoanStatus, Arrears, Guarantor
 from ..schemas import LoanCreate, LoanResponse, LoanUpdate, GuarantorUpdate
 from ..auth import get_current_user
 from ..services.loan_pdf_service import generate_loan_receipt
+from ..services.loan_service import sync_overdue_state
 
 router = APIRouter(prefix="/loans", tags=["loans"])
 logger = logging.getLogger(__name__)
+
+
+async def _refresh_overdue_states(db: AsyncSession):
+    today = datetime.utcnow().date()
+    result = await db.execute(
+        select(Loan).filter(
+            Loan.due_date.isnot(None),
+            Loan.due_date < today,
+            Loan.remaining_amount.isnot(None),
+            Loan.remaining_amount > 0,
+        )
+    )
+    loans = result.scalars().all()
+    state_changed = False
+    for loan in loans:
+        state_changed = await sync_overdue_state(db, loan) or state_changed
+    if state_changed:
+        await db.commit()
 
 
 def _days_to_repay(start_date: date, completed_at: datetime | None) -> int | None:
@@ -189,12 +208,15 @@ async def list_active_loans(
     current_user = Depends(get_current_user)
 ):
     try:
+        await _refresh_overdue_states(db)
+
         today = date.today()
         base_stmt = (
             select(Loan)
             .options(selectinload(Loan.guarantor), selectinload(Loan.customer))
             .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.ARREARS]))
             .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
+            .where(or_(Loan.due_date.is_(None), Loan.due_date >= today))
         )
 
         # 🔍 FILTER FIRST
