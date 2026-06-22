@@ -29,15 +29,24 @@ async def get_defaulters(
     """
     Return customers who meet the DEFAULTER definition per business rules.
 
-    Implementation notes:
-    - Only consider loans with remaining_amount > 0 and within 30 days since start_date.
-    - Evaluate every 5-day rolling window (ending on each day since start_date)
-      and flag a loan if any window has either:
-        a) zero payments in that 5-day window (5 consecutive missed days), or
-        b) sum(payments in that 5-day window) < 5 * daily_instalment.
+    Definition: a loan is a defaulter if, as of `today`, the customer has gone
+    `min_days` (default 5) or more CONSECUTIVE days without their cumulative
+    daily instalment being fully covered.
 
-    The returned dict keeps the `days_defaulted` key for compatibility. For the
-    shortfall case we return the shortfall amount (rounded) in `days_defaulted`.
+    Implementation:
+    - Only consider loans with remaining_amount > 0 and within the 30-day
+      active window since start_date.
+    - Walk day-by-day from start_date to `last_day` (today, capped at the
+      30-day window), tracking running expected total vs running paid total.
+      A day counts as "missed" if cumulative paid < cumulative expected as of
+      that day's end. We track the LONGEST currently-open streak of missed
+      days ending at `last_day` (i.e. the consecutive missed-day count as of
+      today), not just the first 5-day window that happened to qualify.
+    - A loan is flagged once that current streak reaches `min_days`.
+
+    Returns `days_defaulted` = number of consecutive days currently missed
+    (as of `today`), so loans further behind correctly show more days than
+    loans that just crossed the threshold.
     """
     today = reference_date or datetime.now(EAT).date()
 
@@ -101,55 +110,27 @@ async def get_defaulters(
             continue
 
         daily_instalment = float(loan.total_amount) / 30.0
+        sums_map = payments_sum_by_loan_date.get(loan.id, {})
 
         # Determine the last day to evaluate (cannot go beyond the 30-day window)
         last_day = min(today, loan.start_date + timedelta(days=29))
 
-        flagged = False
-        flagged_value = 0
+        # Walk day-by-day, tracking running expected vs running paid, and the
+        # length of the currently-open streak of "behind schedule" days.
+        expected_total = 0.0
+        paid_total = 0.0
+        current_streak = 0
+        current = loan.start_date
+        while current <= last_day:
+            expected_total += daily_instalment
+            paid_total += sums_map.get(current, 0.0)
+            if paid_total < expected_total - 0.01:  # small tolerance for float rounding
+                current_streak += 1
+            else:
+                current_streak = 0
+            current += timedelta(days=1)
 
-        # Precompute set of payment dates for fast membership checks
-        payment_dates = set(payments_sum_by_loan_date.get(loan.id, {}).keys())
-
-        # Evaluate every 5-day rolling window ending on each day >= start_date+4
-        window_end = loan.start_date + timedelta(days=4)
-        while window_end <= last_day:
-            window_start = window_end - timedelta(days=4)
-
-            # Sum payments inside window
-            window_sum = 0.0
-            sums_map = payments_sum_by_loan_date.get(loan.id, {})
-            current = window_start
-            while current <= window_end:
-                window_sum += sums_map.get(current, 0.0)
-                current += timedelta(days=1)
-
-            # Check zero payments (5 consecutive missed days)
-            if window_sum == 0.0:
-                # compute consecutive missed days ending at window_end (may be >5)
-                consec = 0
-                scan = window_end
-                while scan >= loan.start_date:
-                    if scan in payment_dates:
-                        break
-                    consec += 1
-                    scan -= timedelta(days=1)
-                flagged = True
-                flagged_value = consec
-                break
-
-            # Check shortfall in this 5-day window
-            required = 5 * daily_instalment
-            if window_sum < required:
-                shortfall = round(required - window_sum, 2)
-                flagged = True
-                # store shortfall amount in the same field as days_defaulted per instructions
-                flagged_value = shortfall
-                break
-
-            window_end += timedelta(days=1)
-
-        if not flagged:
+        if current_streak < min_days:
             continue
 
         defaulters.append(
@@ -161,10 +142,10 @@ async def get_defaulters(
                 "loan_amount": float(loan.amount or 0),
                 "date_loan_taken": loan.start_date.isoformat() if loan.start_date else None,
                 "loan_balance": float(remaining or 0),
-                "days_defaulted": flagged_value,
+                "days_defaulted": current_streak,
             }
         )
 
-    # Sort: put largest consecutive missed days or largest shortfalls first
+    # Sort: largest consecutive missed days first
     defaulters.sort(key=lambda row: row["days_defaulted"], reverse=True)
     return defaulters
