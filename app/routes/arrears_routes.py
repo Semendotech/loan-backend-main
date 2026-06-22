@@ -16,7 +16,7 @@ router = APIRouter(prefix="/arrears", tags=["arrears"])
 @router.get("/")
 async def list_arrears(
     only_active: bool = True,
-    limit: int = 100,
+    limit: int = 1000,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
