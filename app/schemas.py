@@ -32,6 +32,12 @@ class UserCreate(BaseModel):
     role: UserRoleEnum = UserRoleEnum.LOAN_OFFICER
 
 
+class SignupRequest(BaseModel):
+    username: str
+    password: str
+    first_name: Optional[str] = None
+
+
 class UserUpdate(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
