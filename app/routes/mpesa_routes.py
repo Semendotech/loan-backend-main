@@ -19,15 +19,33 @@ from app import models
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-# Configure logging with force=True to override any existing handlers
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s:%(message)s",
-    force=True
-)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/c2b", tags=["M-Pesa Integration"])
+
+
+def _loan_status_label(loan: models.Loan) -> str:
+    status = loan.status
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _log_payment_recorded(
+    *,
+    customer_name: str,
+    loan_id: int,
+    amount: float,
+    remaining: float,
+    status: str,
+) -> None:
+    """Classic multi-line payment log block for Render."""
+    logger.info(
+        "Payment Successfully Recorded:\n"
+        f"     Customer: {customer_name}\n"
+        f"            Loan: {loan_id}\n"
+        f"          Amount: {amount}\n"
+        f"       Remaining: {remaining}\n"
+        f"          Status: {status}"
+    )
 
 
 class MpesaCallbackData(BaseModel):
@@ -54,11 +72,13 @@ async def send_sms(phone: str, message: str) -> bool:
             logger.error("AFRICAS_TALKING_USERNAME not configured")
             return False
 
-        if not phone.startswith('+'):
-            if phone.startswith('0'):
-                phone = '+254' + phone[1:]
+        if not phone.startswith("+"):
+            if phone.startswith("254"):
+                phone = f"+{phone}"
+            elif phone.startswith("0"):
+                phone = f"+254{phone[1:]}"
             else:
-                phone = '+254' + phone
+                phone = f"+254{phone}"
 
         url = "https://api.africastalking.com/version1/messaging"
 
@@ -96,7 +116,7 @@ async def send_sms(phone: str, message: str) -> bool:
 async def mpesa_validation(request: Request):
     try:
         body = await request.json()
-        logger.info(f"Validation request received: {body}")
+        logger.debug("Validation request received: %s", body)
     except Exception as e:
         logger.warning(f"Validation request error: {str(e)}")
 
@@ -112,8 +132,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
 
     try:
         body = await request.json()
-
-        logger.info(f"CALLBACK RECEIVED: {body}")
+        logger.debug("M-Pesa callback payload: %s", body)
 
         trans_id = body.get("TransID")
         amount = float(body.get("TransAmount") or 0)
@@ -132,10 +151,11 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 logger.error(f"Invalid MSISDN in callback: {raw_msisdn} ({exc})")
                 return {"ResultCode": 0, "ResultDesc": "Invalid phone number"}
 
-        logger.info(
-            f"Extracted - TransID: {trans_id}, Amount: {amount}, "
-            f"Raw_MSISDN: {raw_msisdn}, Normalized_MSISDN: {normalized_msisdn}, "
-            f"MSISDN_Hash: {msisdn_hash[:16]}..."
+        logger.debug(
+            "Parsed callback TransID=%s amount=%s msisdn_hash=%s",
+            trans_id,
+            amount,
+            f"{msisdn_hash[:16]}...",
         )
 
         if not all([trans_id, msisdn_hash, amount > 0]):
@@ -149,7 +169,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
             select(models.MpesaTransaction).where(models.MpesaTransaction.trans_id == trans_id)
         )
         if existing.scalar_one_or_none():
-            logger.info(f"Duplicate transaction received: {trans_id}")
+            logger.info("Duplicate transaction received: %s", trans_id)
             return {
                 "ResultCode": 0,
                 "ResultDesc": "Already processed"
@@ -161,9 +181,9 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         customer = result.scalar_one_or_none()
 
         if customer:
-            logger.info(f"Phone hash lookup: Found customer {customer.name}")
+            logger.debug("Phone hash matched customer: %s", customer.name)
         else:
-            logger.info(f"Phone hash lookup: No customer found for hash {msisdn_hash[:16]}...")
+            logger.debug("No customer for phone hash %s...", msisdn_hash[:16])
 
         if not customer:
             logger.warning(
@@ -178,7 +198,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 "ResultDesc": "Payment received - customer not found in system"
             }
 
-        logger.info(f"Customer matched: {customer.name} (Phone: {customer.phone})")
+        logger.debug("Customer matched: %s (%s)", customer.name, customer.phone)
 
         result = await db.execute(
             select(models.Loan).where(
@@ -204,7 +224,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 "ResultDesc": "Payment received - no matching loan found for customer"
             }
 
-        logger.info(f"Loan found: Loan ID {loan.id}, Remaining: {loan.remaining_amount}")
+        logger.debug("Loan matched: id=%s remaining=%s", loan.id, loan.remaining_amount)
 
         installment = models.Installment(
             loan_id=loan.id,
@@ -220,14 +240,6 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         if loan.remaining_amount <= 0:
             loan.status = models.LoanStatus.COMPLETED
             loan.completed_at = datetime.utcnow()
-            logger.info(f"LOAN COMPLETED: Loan ID {loan.id}, Customer: {customer.name}")
-        else:
-            logger.info(
-                f"Partial payment recorded:\n"
-                f"   Loan ID: {loan.id}\n"
-                f"   Payment: {amount}\n"
-                f"   Remaining: {loan.remaining_amount}"
-            )
 
         mpesa_tx = models.MpesaTransaction(
             trans_id=trans_id,
@@ -239,13 +251,12 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
 
         await db.commit()
 
-        logger.info(
-            f"Payment Successfully Recorded:\n"
-            f"   Customer: {customer.name}\n"
-            f"   Loan: {loan.id}\n"
-            f"   Amount: {amount}\n"
-            f"   Remaining: {loan.remaining_amount}\n"
-            f"   Status: {loan.status.value}"
+        _log_payment_recorded(
+            customer_name=customer.name,
+            loan_id=loan.id,
+            amount=amount,
+            remaining=loan.remaining_amount,
+            status=_loan_status_label(loan),
         )
 
         payment_date = datetime.now().strftime("%d/%m/%Y")
@@ -260,7 +271,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         if customer.phone:
             sms_sent = await send_sms(customer.phone, sms_message)
             if sms_sent:
-                logger.info(f"SMS sent to {customer.phone}")
+                logger.debug("SMS sent to %s", customer.phone)
             else:
                 logger.warning(f"SMS failed for {customer.phone}, but payment was recorded")
         else:
