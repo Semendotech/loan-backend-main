@@ -208,7 +208,8 @@ async def list_active_loans(
     current_user = Depends(get_current_user)
 ):
     try:
-        await _refresh_overdue_states(db)
+        # NOTE: _refresh_overdue_states() removed from here to avoid timeout on every GET request.
+        # Call it explicitly when payments are made or via a scheduled background task instead.
 
         today = date.today()
         base_stmt = (
