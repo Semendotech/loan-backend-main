@@ -14,6 +14,12 @@ from ..services.loan_service import reconcile_stale_arrears
 router = APIRouter(prefix="/arrears", tags=["arrears"])
 
 
+async def _refresh_overdue_states_import(db: AsyncSession):
+    """Import from loan_routes to avoid circular imports"""
+    from .loan_routes import _refresh_overdue_states
+    return await _refresh_overdue_states(db)
+
+
 @router.get("/")
 async def list_arrears(
     only_active: bool = True,
@@ -116,6 +122,7 @@ async def pay_arrears(arrears_id: int, body: ArrearsPayment,
 
     db.add(arrears)
     await db.commit()
+    await _refresh_overdue_states_import(db)  # Refresh overdue states after arrears payment
     await db.refresh(arrears)
     await db.refresh(installment)
     return {
@@ -164,5 +171,6 @@ async def clear_arrears(arrears_id: int,
         db.add(installment)
     
     await db.commit()
+    await _refresh_overdue_states_import(db)  # Refresh overdue states after clearing arrears
     await db.refresh(arrears)
     return {"message": "Arrears cleared"}

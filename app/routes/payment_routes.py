@@ -22,6 +22,12 @@ class InstallmentUpdate(BaseModel):
     amount: float
 
 
+async def _refresh_overdue_states_import(db: AsyncSession):
+    """Import from loan_routes to avoid circular imports"""
+    from .loan_routes import _refresh_overdue_states
+    return await _refresh_overdue_states(db)
+
+
 @router.post("/")
 async def record_payment(
     payment: PaymentCreate,
@@ -117,6 +123,7 @@ async def record_payment(
     await sync_overdue_state(db, loan)
     
     await db.commit()
+    await _refresh_overdue_states_import(db)  # Refresh overdue states after payment
     await db.refresh(installment)
     await db.refresh(loan)
     
@@ -198,6 +205,7 @@ async def update_installment_amount(
     await sync_overdue_state(db, loan)
 
     await db.commit()
+    await _refresh_overdue_states_import(db)  # Refresh overdue states after update
     await db.refresh(installment)
     await db.refresh(loan)
 
@@ -265,6 +273,7 @@ async def delete_installment(
     await sync_overdue_state(db, loan)
 
     await db.commit()
+    await _refresh_overdue_states_import(db)  # Refresh overdue states after deletion
     await db.refresh(loan)
 
     return {
@@ -272,4 +281,3 @@ async def delete_installment(
         "remaining_balance": loan.remaining_amount,
         "loan_status": loan.status.value,
     }
-
