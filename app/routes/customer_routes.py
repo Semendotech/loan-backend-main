@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import or_, text
+from sqlalchemy import or_, text, func
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from ..database import get_db
@@ -137,7 +137,21 @@ async def list_customers(
                 Customer.location.ilike(f"%{q}%"),
             )
         )
-    
+
+    # Total count for pagination
+    count_stmt = select(func.count()).select_from(Customer)
+    if q:
+        count_stmt = count_stmt.where(
+            or_(
+                Customer.name.ilike(f"%{q}%"),
+                Customer.phone.ilike(f"%{q}%"),
+                Customer.id_number.ilike(f"%{q}%"),
+                Customer.location.ilike(f"%{q}%"),
+            )
+        )
+    total_result = await db.execute(count_stmt)
+    total_count = total_result.scalar_one()
+
     # 📄 THEN paginate
     stmt = base_stmt.order_by(Customer.created_at.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
@@ -156,20 +170,25 @@ async def list_customers(
     else:
         active_customer_ids = set()
 
-    # Return serialized payload with has_active_loan flag
-    return [
-        {
-            "id": c.id,
-            "name": c.name,
-            "id_number": c.id_number,
-            "phone": c.phone,
-            "location": c.location,
-            "profile_image_url": c.profile_image_url,
-            "created_at": c.created_at,
-            "has_active_loan": c.id_number in active_customer_ids,
-        }
-        for c in customers
-    ]
+    # Return serialized payload with has_active_loan flag and pagination metadata
+    return {
+        "items": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "id_number": c.id_number,
+                "phone": c.phone,
+                "location": c.location,
+                "profile_image_url": c.profile_image_url,
+                "created_at": c.created_at,
+                "has_active_loan": c.id_number in active_customer_ids,
+            }
+            for c in customers
+        ],
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/by-id-number/{id_number}")
