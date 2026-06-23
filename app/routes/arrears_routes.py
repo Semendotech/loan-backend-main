@@ -9,6 +9,7 @@ from typing import Optional
 from ..database import get_db
 from ..models import Arrears, Customer, Loan, LoanStatus, Installment
 from ..auth import get_current_user
+from ..services.loan_service import reconcile_stale_arrears
 
 router = APIRouter(prefix="/arrears", tags=["arrears"])
 
@@ -21,6 +22,11 @@ async def list_arrears(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    # Self-heal: clear any arrears whose loan has already been fully paid off
+    # through a path that didn't go through pay_arrears/clear_arrears below.
+    if await reconcile_stale_arrears(db):
+        await db.commit()
+
     q = select(Arrears).options(selectinload(Arrears.customer)).order_by(Arrears.created_at.desc())
     if only_active:
         q = q.filter(Arrears.is_cleared == False)
@@ -32,6 +38,7 @@ async def list_arrears(
             "id": a.id,
             "customer_id": a.customer_id,
             "customer_name": a.customer.name if a.customer else None,
+            "customer_phone": a.customer.phone if a.customer else None,
             "loan_id": a.loan_id,
             "original_amount": a.original_amount,
             "remaining_amount": a.remaining_amount,
@@ -159,22 +166,3 @@ async def clear_arrears(arrears_id: int,
     await db.commit()
     await db.refresh(arrears)
     return {"message": "Arrears cleared"}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
