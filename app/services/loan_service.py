@@ -5,6 +5,7 @@ from typing import Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.models import Arrears, Customer, Loan, LoanStatus
 
@@ -149,10 +150,47 @@ async def sync_overdue_state(
     return changed
 
 
+async def reconcile_stale_arrears(db: AsyncSession) -> bool:
+    """
+    Safety net: find any Arrears row still marked active (is_cleared=False)
+    whose linked Loan has already been fully paid off (remaining_amount <= 0),
+    and clear it. This catches cases where a loan's remaining_amount reached
+    zero through a path that didn't go through arrears_routes.pay_arrears/
+    clear_arrears (e.g. a direct installment elsewhere), leaving a stale
+    arrears record behind that never gets cleaned up by sync_overdue_state
+    (which only re-checks loans matching its own overdue query).
+    Returns True if any row was changed.
+    """
+    result = await db.execute(
+        select(Arrears)
+        .options(selectinload(Arrears.loan))
+        .filter(Arrears.is_cleared == False)
+    )
+    stale_arrears = result.scalars().all()
+
+    changed = False
+    for arrears in stale_arrears:
+        loan = arrears.loan
+        if not loan:
+            continue
+        remaining = loan.remaining_amount
+        if remaining is None:
+            continue
+        if remaining <= 0:
+            arrears.remaining_amount = 0.0
+            arrears.is_cleared = True
+            arrears.cleared_date = datetime.utcnow()
+            if loan.status != LoanStatus.COMPLETED:
+                loan.status = LoanStatus.COMPLETED
+                loan.completed_at = datetime.utcnow()
+            changed = True
+
+    return changed
+
+
 def loan_is_overdue_by_schedule(loan: Loan, reference_date: Optional[date] = None) -> bool:
     ref_date = reference_date or datetime.utcnow().date()
     if not loan.start_date:
         return False
     days_since_start = (ref_date - loan.start_date).days
     return days_since_start > 30 and _remaining_amount(loan) > 0
-
