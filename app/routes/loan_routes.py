@@ -207,17 +207,20 @@ async def list_active_loans(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    """
+    List ACTIVE loans only (status == ACTIVE).
+    These are loans within the 30-day repayment window.
+    Loans past 30 days are handled by the overdue/arrears system.
+    """
     try:
-        # NOTE: _refresh_overdue_states() removed from here to avoid timeout on every GET request.
-        # Call it explicitly when payments are made or via a scheduled background task instead.
+        # NOTE: Only show loans with status == ACTIVE
+        # Overdue loans (>30 days since start) are tracked separately via Arrears table
 
-        today = date.today()
         base_stmt = (
             select(Loan)
             .options(selectinload(Loan.guarantor), selectinload(Loan.customer))
-            .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.ARREARS]))
+            .where(Loan.status == LoanStatus.ACTIVE)  # ONLY ACTIVE status
             .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
-            .where(or_(Loan.due_date.is_(None), Loan.due_date >= today))
         )
 
         # 🔍 FILTER FIRST
