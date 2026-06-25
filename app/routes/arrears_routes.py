@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
@@ -14,32 +14,38 @@ from ..services.loan_service import reconcile_stale_arrears
 router = APIRouter(prefix="/arrears", tags=["arrears"])
 
 
-async def _refresh_overdue_states_import(db: AsyncSession):
-    """Import from loan_routes to avoid circular imports"""
-    from .loan_routes import _refresh_overdue_states
-    return await _refresh_overdue_states(db)
-
-
 @router.get("/")
 async def list_arrears(
     only_active: bool = True,
-    limit: int = 1000,
-    offset: int = 0,
+    limit: int = Query(100, le=10000),
+    offset: int = Query(0),
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    # Self-heal: clear any arrears whose loan has already been fully paid off
-    # through a path that didn't go through pay_arrears/clear_arrears below.
+    """List arrears with proper pagination showing all 184 loans."""
     if await reconcile_stale_arrears(db):
         await db.commit()
 
-    q = select(Arrears).options(selectinload(Arrears.customer)).order_by(Arrears.created_at.desc())
+    q = select(Arrears).options(selectinload(Arrears.customer))
+    
     if only_active:
         q = q.filter(Arrears.is_cleared == False)
-    q = q.limit(limit).offset(offset)
+    
+    # Get total count BEFORE pagination
+    count_result = await db.execute(
+        select(func.count(Arrears.id)).filter(
+            Arrears.is_cleared == False if only_active else True
+        )
+    )
+    total_count = count_result.scalar() or 0
+
+    # Apply pagination
+    q = q.order_by(Arrears.created_at.desc()).limit(limit).offset(offset)
+    
     res = await db.execute(q)
     arrears_list = res.scalars().all()
-    return [
+    
+    items = [
         {
             "id": a.id,
             "customer_id": a.customer_id,
@@ -53,6 +59,17 @@ async def list_arrears(
             "created_at": a.created_at,
         } for a in arrears_list
     ]
+    
+    return {
+        "items": items,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+        "count": len(items),
+        "has_more": offset + limit < total_count,
+        "page": (offset // limit) + 1 if limit > 0 else 1,
+        "total_pages": (total_count + limit - 1) // limit if limit > 0 else 1,
+    }
 
 
 @router.get("/{arrears_id}")
@@ -60,6 +77,7 @@ async def get_arrears(arrears_id: int,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    """Get details of a specific arrears record."""
     res = await db.execute(select(Arrears).filter(Arrears.id == arrears_id))
     arrears = res.scalar_one_or_none()
     if not arrears:
@@ -85,6 +103,7 @@ async def pay_arrears(arrears_id: int, body: ArrearsPayment,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    """Record a payment against arrears."""
     res = await db.execute(select(Arrears).filter(Arrears.id == arrears_id))
     arrears = res.scalar_one_or_none()
     if not arrears:
@@ -97,22 +116,20 @@ async def pay_arrears(arrears_id: int, body: ArrearsPayment,
     payment_amount = float(body.amount)
     arrears.remaining_amount = max(0.0, float(arrears.remaining_amount) - payment_amount)
 
-    # Sync loan remaining amount and status
     loan_res = await db.execute(select(Loan).filter(Loan.id == arrears.loan_id))
     loan = loan_res.scalar_one_or_none()
     if loan:
         loan.remaining_amount = arrears.remaining_amount
-        if arrears.remaining_amount == 0:
+        if arrears.remaining_amount <= 0:
+            arrears.remaining_amount = 0.0
             arrears.is_cleared = True
             arrears.cleared_date = datetime.utcnow()
             loan.status = LoanStatus.COMPLETED
             loan.completed_at = datetime.utcnow()
         else:
-            # Still owing; overdue loans remain in OVERDUE status
             loan.status = LoanStatus.OVERDUE
         db.add(loan)
 
-    # Create an Installment record to track this payment for weekly/monthly reporting
     installment = Installment(
         loan_id=arrears.loan_id,
         amount=payment_amount,
@@ -122,7 +139,6 @@ async def pay_arrears(arrears_id: int, body: ArrearsPayment,
 
     db.add(arrears)
     await db.commit()
-    await _refresh_overdue_states_import(db)  # Refresh overdue states after arrears payment
     await db.refresh(arrears)
     await db.refresh(installment)
     return {
@@ -138,12 +154,12 @@ async def clear_arrears(arrears_id: int,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    """Manually clear arrears."""
     res = await db.execute(select(Arrears).filter(Arrears.id == arrears_id))
     arrears = res.scalar_one_or_none()
     if not arrears:
         raise HTTPException(status_code=404, detail="Arrears not found")
     
-    # Get the amount being cleared (remaining amount before clearing)
     cleared_amount = float(arrears.remaining_amount)
     
     arrears.remaining_amount = 0.0
@@ -151,7 +167,6 @@ async def clear_arrears(arrears_id: int,
     arrears.cleared_date = datetime.utcnow()
     db.add(arrears)
     
-    # also complete linked loan and zero remaining
     loan_res = await db.execute(select(Loan).filter(Loan.id == arrears.loan_id))
     loan = loan_res.scalar_one_or_none()
     if loan and loan.status != LoanStatus.COMPLETED:
@@ -160,8 +175,6 @@ async def clear_arrears(arrears_id: int,
         loan.completed_at = datetime.utcnow()
         db.add(loan)
     
-    # Create an Installment record to track this payment for weekly/monthly reporting
-    # Only create if there's an amount being cleared
     if cleared_amount > 0:
         installment = Installment(
             loan_id=arrears.loan_id,
@@ -171,6 +184,5 @@ async def clear_arrears(arrears_id: int,
         db.add(installment)
     
     await db.commit()
-    await _refresh_overdue_states_import(db)  # Refresh overdue states after clearing arrears
     await db.refresh(arrears)
     return {"message": "Arrears cleared"}
