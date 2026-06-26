@@ -1,4 +1,6 @@
-﻿# ============ AUTH MODELS ============
+﻿
+
+# ============ AUTH MODELS ============
 class UserRole(PyEnum):
     ADMIN = "ADMIN"
     USER = "USER"
@@ -240,4 +242,3 @@ class DefaulterFlag(Base):
 
     loan = relationship("Loan")
     customer = relationship("Customer")
-
