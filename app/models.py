@@ -1,3 +1,21 @@
+﻿# ============ AUTH MODELS ============
+class UserRole(PyEnum):
+    ADMIN = "ADMIN"
+    USER = "USER"
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, nullable=False, index=True)
+    password = Column(String, nullable=False)
+    email = Column(String, unique=True, nullable=True)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    role = Column(Enum(UserRole), default=UserRole.USER)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 """
 CORRECTED Models - Loan Management System
 - Added is_defaulter flag to Loan model
@@ -222,3 +240,4 @@ class DefaulterFlag(Base):
 
     loan = relationship("Loan")
     customer = relationship("Customer")
+
