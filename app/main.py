@@ -111,6 +111,7 @@ async def startup_event():
         await _seed_admin_user()
     except Exception as e:
         print("❌ Startup error:", e)
+        raise
 
 
 @app.on_event("shutdown")
