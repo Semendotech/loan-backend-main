@@ -70,7 +70,7 @@ async def login(request: Request, response: Response, username: str, password: s
 
         # Create cookie
         session_token = create_session_cookie(username)
-        secure_cookie = request.url.scheme == "https"
+        secure_cookie = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
         response.set_cookie(
             key="session_token",
             value=session_token,
