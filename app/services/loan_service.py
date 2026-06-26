@@ -8,6 +8,8 @@ CORRECTED Loan Service - Core Business Logic
 
 from datetime import datetime, timedelta, date
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select as sa_select
 from sqlalchemy import func, and_, or_
 from app.models import Loan, Arrears, Installment, Customer, LoanStatus, DefaulterFlag
 
@@ -395,3 +397,78 @@ class LoanService:
             "completed_loans": completed_count,
             "completed_cleared_amount": completed_outstanding,
         }
+
+
+
+# ============ STANDALONE HELPERS (used by customer_routes.py) ============
+
+def compute_weekly_progress(loan: Loan) -> dict:
+    """
+    Compute weekly repayment progress for a loan based on the 30-day cycle.
+    daily_instalment = total_amount / 30
+    weekly_due_amount = daily_instalment * 7
+    arrears_amount = max(expected_cumulative - paid_cumulative, 0)
+    """
+    daily_instalment = loan.daily_instalment
+    days_elapsed = max(loan.days_since_start, 0)
+    days_for_schedule = min(days_elapsed, 30)
+
+    expected_cumulative = daily_instalment * days_for_schedule
+    paid_cumulative = sum((inst.amount for inst in (loan.installments or [])), 0.0)
+
+    arrears_amount = max(expected_cumulative - paid_cumulative, 0.0)
+    week_number = (days_for_schedule // 7) + 1 if days_for_schedule > 0 else 1
+
+    return {
+        "week_number": min(week_number, 5),
+        "days_elapsed": days_elapsed,
+        "weekly_due_amount": round(daily_instalment * 7, 2),
+        "expected_cumulative": round(expected_cumulative, 2),
+        "paid_cumulative": round(paid_cumulative, 2),
+        "arrears_amount": round(arrears_amount, 2),
+    }
+
+
+def loan_is_overdue_by_schedule(loan: Loan) -> bool:
+    """
+    Returns True if the loan has fallen behind its expected payment
+    schedule, regardless of whether `status` has been synced yet.
+    """
+    progress = compute_weekly_progress(loan)
+    return progress["arrears_amount"] > 0 and loan.days_since_start >= 1
+
+
+async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
+    """
+    Async equivalent of LoanService.sync_loan_status, for use with AsyncSession.
+    Returns True if the loan's status changed.
+    """
+    expected_status = loan.status_should_be
+    status_changed = False
+
+    if loan.status != expected_status:
+        loan.status = expected_status
+        loan.updated_at = datetime.utcnow()
+        status_changed = True
+
+    if expected_status == LoanStatus.OVERDUE and not loan.arrears:
+        arrears = Arrears(
+            loan_id=loan.id,
+            customer_id=loan.customer_id,
+            original_amount=loan.remaining_amount,
+            remaining_amount=loan.remaining_amount,
+            is_cleared=False,
+            arrears_date=datetime.utcnow(),
+        )
+        db.add(arrears)
+
+    if expected_status == LoanStatus.COMPLETED and loan.arrears:
+        loan.arrears.is_cleared = True
+        loan.arrears.cleared_date = datetime.utcnow()
+        loan.arrears.remaining_amount = 0
+        loan.completed_at = datetime.utcnow()
+
+    if status_changed or expected_status == LoanStatus.OVERDUE:
+        await db.commit()
+
+    return status_changed

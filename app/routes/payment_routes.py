@@ -14,7 +14,7 @@ from typing import Optional
 from app.database import get_db
 from app.models import Loan, Installment, Arrears, LoanStatus
 from app.services.loan_service import LoanService
-from app.dependencies import get_current_user
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -264,3 +264,4 @@ def delete_installment(
         LoanService.check_defaulter_status(db, loan.id)
 
     return {"message": "Installment deleted successfully"}
+

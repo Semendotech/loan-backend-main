@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import Loan, LoanStatus, Arrears
 from app.services.loan_service import LoanService
-from app.dependencies import get_current_user
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/loans", tags=["loans"])
 
@@ -242,3 +242,4 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+

@@ -207,7 +207,7 @@ async def get_customer_by_id_number(
     # 🔹 Filter only active (and overdue) loans with guarantor relationship loaded
     loans_result = await db.execute(
         select(Loan)
-        .options(selectinload(Loan.guarantor))
+        .options(selectinload(Loan.guarantor), selectinload(Loan.installments))
         .filter(
             Loan.customer_id == customer.id_number,  # customer_id stores id_number
             Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS])
@@ -255,7 +255,7 @@ async def get_customer_by_id(
     # Get customer loans with guarantor relationship loaded
     loans_result = await db.execute(
         select(Loan)
-        .options(selectinload(Loan.guarantor))
+        .options(selectinload(Loan.guarantor), selectinload(Loan.installments))
         .filter(Loan.customer_id == customer.id_number)
     )
     loans = loans_result.scalars().all()
@@ -600,3 +600,4 @@ async def delete_customer(
         "message": "Customer and all related records deleted successfully",
         "customer_id": customer_id
     }
+

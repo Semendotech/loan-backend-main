@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from app.database import get_db
 from app.models import Loan, Arrears, Installment, LoanStatus
 from app.services.loan_service import LoanService
-from app.dependencies import get_current_user
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -341,3 +341,4 @@ def defaulters_report(
             for d in defaulters
         ],
     }
+
