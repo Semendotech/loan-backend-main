@@ -10,7 +10,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from typing import Optional
 
-from app.database import get_db
+from app.database import get_sync_db
 from app.models import Arrears, Loan, LoanStatus, Installment
 from app.services.loan_service import LoanService
 from app.auth import get_current_user
@@ -52,7 +52,7 @@ def get_arrears(
     only_active: bool = Query(True),
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -89,7 +89,7 @@ def get_arrears(
 @router.get("/{arrears_id}", response_model=ArrearsResponse)
 def get_arrears_detail(
     arrears_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Get details of a specific arrears record"""
@@ -104,7 +104,7 @@ def get_arrears_detail(
 def record_arrears_payment(
     arrears_id: int,
     payment_data: dict,  # {"amount": float, "payment_method": str}
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -146,7 +146,7 @@ def record_arrears_payment(
 @router.post("/{arrears_id}/clear")
 def clear_arrears(
     arrears_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -180,7 +180,7 @@ def clear_arrears(
 @router.get("/loan/{loan_id}")
 def get_loan_arrears(
     loan_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Get arrears record for a specific loan (if it exists)"""
@@ -197,7 +197,7 @@ def get_customer_arrears(
     customer_id: str,
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Get all arrears records for a customer"""
@@ -212,4 +212,5 @@ def get_customer_arrears(
         "limit": limit,
         "offset": offset,
     }
+
 

@@ -11,7 +11,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from typing import Optional
 
-from app.database import get_db
+from app.database import get_sync_db
 from app.models import Loan, Installment, Arrears, LoanStatus
 from app.services.loan_service import LoanService
 from app.auth import get_current_user
@@ -59,7 +59,7 @@ class InstallmentListResponse(BaseModel):
 @router.post("/record", response_model=PaymentResponse)
 def record_payment(
     payment: PaymentRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -105,7 +105,7 @@ def get_loan_payments(
     loan_id: int,
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Get all payments (installments) for a loan"""
@@ -131,7 +131,7 @@ def get_loan_payments(
 @router.get("/summary/{loan_id}")
 def get_payment_summary(
     loan_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -184,7 +184,7 @@ def get_payment_summary(
 def update_installment(
     installment_id: int,
     update_data: dict,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -235,7 +235,7 @@ def update_installment(
 @router.delete("/installment/{installment_id}")
 def delete_installment(
     installment_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -264,4 +264,5 @@ def delete_installment(
         LoanService.check_defaulter_status(db, loan.id)
 
     return {"message": "Installment deleted successfully"}
+
 

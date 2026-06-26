@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
 
-from app.database import get_db
+from app.database import get_sync_db
 from app.models import Loan, Arrears, Installment, LoanStatus
 from app.services.loan_service import LoanService
 from app.auth import get_current_user
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 @router.get("/metrics")
 def get_dashboard_metrics(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -55,7 +55,7 @@ def get_dashboard_metrics(
 
 @router.get("/summary")
 def get_dashboard_summary(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -127,7 +127,7 @@ def get_dashboard_summary(
 
 @router.get("/trends")
 def get_trends(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -182,7 +182,7 @@ def get_trends(
 def get_defaulters_list(
     limit: int = 50,
     offset: int = 0,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -226,7 +226,7 @@ def get_defaulters_list(
 
 @router.get("/reports/active-loans-summary")
 def active_loans_report(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -264,7 +264,7 @@ def active_loans_report(
 
 @router.get("/reports/overdue-summary")
 def overdue_report(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -304,7 +304,7 @@ def overdue_report(
 
 @router.get("/reports/defaulters-summary")
 def defaulters_report(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -341,4 +341,5 @@ def defaulters_report(
             for d in defaulters
         ],
     }
+
 

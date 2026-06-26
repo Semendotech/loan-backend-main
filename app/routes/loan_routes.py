@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.database import get_sync_db
 from app.models import Loan, LoanStatus, Arrears
 from app.services.loan_service import LoanService
 from app.auth import get_current_user
@@ -66,7 +66,7 @@ class LoanListResponse(BaseModel):
 @router.post("/create")
 def create_loan(
     loan_data: LoanRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -95,7 +95,7 @@ def create_loan(
 def get_active_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -126,7 +126,7 @@ def get_active_loans(
 def get_overdue_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -149,7 +149,7 @@ def get_overdue_loans(
 def get_cleared_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -171,7 +171,7 @@ def get_cleared_loans(
 @router.get("/{loan_id}", response_model=LoanResponse)
 def get_loan_detail(
     loan_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Get details of a specific loan"""
@@ -189,7 +189,7 @@ def get_loan_detail(
 def update_loan(
     loan_id: int,
     update_data: dict,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -219,7 +219,7 @@ def update_loan(
 @router.delete("/{loan_id}")
 def delete_loan(
     loan_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -242,4 +242,5 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
 
