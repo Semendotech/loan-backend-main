@@ -1,151 +1,270 @@
-from __future__ import annotations
+"""
+CORRECTED Defaulter Service
+- Implement 5-day consecutive payment rule
+- Track defaulter status changes
+- Provide defaulter reports
+"""
 
-from collections import defaultdict
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-from sqlalchemy import and_, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
-from app.models import Installment, Loan, LoanStatus
-
-EAT = ZoneInfo("Africa/Nairobi")
-DEFAULT_MIN_MISSED_DAYS = 5
+from app.models import Loan, Installment, LoanStatus, DefaulterFlag
 
 
-def _payment_date_in_eat(payment_date: datetime) -> date:
-    if payment_date.tzinfo is None:
-        payment_date = payment_date.replace(tzinfo=ZoneInfo("UTC"))
-    return payment_date.astimezone(EAT).date()
+class DefaulterService:
+    """Service for defaulter detection and management"""
 
+    @staticmethod
+    def check_loan_is_defaulter(db: Session, loan_id: int) -> bool:
+        """
+        Check if a loan should be flagged as DEFAULTER.
+        
+        Rule: DEFAULTER if in ACTIVE period (days 1-30) AND
+              sum of payments in last 5 consecutive days < (daily_instalment * 5)
+        
+        Example:
+        - Daily instalment: 120
+        - Required for 5 days: 600
+        - If paid < 600 in last 5 days: DEFAULTER
+        
+        Returns True if should be flagged, False otherwise.
+        """
+        loan = db.query(Loan).filter(Loan.id == loan_id).first()
+        if not loan:
+            return False
 
-async def get_defaulters(
-    db: AsyncSession,
-    min_days: int = DEFAULT_MIN_MISSED_DAYS,
-    reference_date: date | None = None,
-    min_loan_start_date: date | None = None,
-) -> list[dict]:
-    """
-    Return customers who meet the DEFAULTER definition per business rules.
+        # Only check during ACTIVE period (days 1-30)
+        if not loan.is_active_period:
+            return False
 
-    Definition: a loan is a defaulter if, as of `today`, the customer has gone
-    `min_days` (default 5) or more CONSECUTIVE days without their cumulative
-    daily instalment being fully covered.
+        daily_instalment = loan.daily_instalment
+        required_5_day_amount = daily_instalment * 5
 
-    Implementation:
-    - Only consider loans with remaining_amount > 0 and within the 30-day
-      active window since start_date.
-    - Walk day-by-day from start_date to `last_day` (today, capped at the
-      30-day window), tracking running expected total vs running paid total.
-      A day counts as "missed" if cumulative paid < cumulative expected as of
-      that day's end. We track the LONGEST currently-open streak of missed
-      days ending at `last_day` (i.e. the consecutive missed-day count as of
-      today), not just the first 5-day window that happened to qualify.
-    - A loan is flagged once that current streak reaches `min_days`.
+        # Get payments from last 5 days
+        five_days_ago = datetime.utcnow() - timedelta(days=5)
 
-    Returns `days_defaulted` = number of consecutive days currently missed
-    (as of `today`), so loans further behind correctly show more days than
-    loans that just crossed the threshold.
-    """
-    today = reference_date or datetime.now(EAT).date()
+        total_paid_5_days = db.query(func.sum(Installment.amount)).filter(
+            Installment.loan_id == loan_id,
+            Installment.payment_date >= five_days_ago,
+        ).scalar() or 0
 
-    # Fetch candidate loans (exclude completed)
-    active_filter = and_(
-        Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.ARREARS]),
-        or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0),
-    )
+        # Defaulter if total < required
+        return total_paid_5_days < required_5_day_amount
 
-    loans_result = await db.execute(
-        select(Loan)
-        .options(selectinload(Loan.customer))
-        .where(active_filter)
-    )
-    loans = loans_result.scalars().all()
-    if not loans:
-        return []
+    @staticmethod
+    def get_5_day_payment_window(db: Session, loan_id: int) -> dict:
+        """
+        Get detailed 5-day payment window analysis.
+        
+        Returns:
+        {
+            "loan_id": int,
+            "daily_instalment": float,
+            "required_5_days": float,
+            "actual_paid_5_days": float,
+            "is_defaulter": bool,
+            "days_breakdown": [
+                {"date": "2026-06-25", "amount": 120},
+                ...
+            ]
+        }
+        """
+        loan = db.query(Loan).filter(Loan.id == loan_id).first()
+        if not loan:
+            return {}
 
-    # Load installments (payment amounts and dates) for these loans
-    loan_ids = [loan.id for loan in loans]
-    installments_result = await db.execute(
-        select(Installment.loan_id, Installment.payment_date, Installment.amount).where(
-            Installment.loan_id.in_(loan_ids)
-        )
-    )
+        daily_instalment = loan.daily_instalment
+        required_5_day = daily_instalment * 5
+        
+        # Get last 5 days of payments
+        five_days_ago = datetime.utcnow() - timedelta(days=5)
+        
+        payments = db.query(Installment).filter(
+            Installment.loan_id == loan_id,
+            Installment.payment_date >= five_days_ago,
+        ).order_by(Installment.payment_date).all()
 
-    payments_by_loan: dict[int, list[tuple[date, float]]] = defaultdict(list)
-    for loan_id, payment_date, amount in installments_result.all():
-        if payment_date is None:
-            continue
-        pd = _payment_date_in_eat(payment_date)
-        payments_by_loan[loan_id].append((pd, float(amount or 0.0)))
+        # Group by date
+        by_date = {}
+        for payment in payments:
+            date_key = payment.payment_date.date()
+            if date_key not in by_date:
+                by_date[date_key] = 0
+            by_date[date_key] += payment.amount
 
-    # Build quick lookup of sums per date for each loan
-    payments_sum_by_loan_date: dict[int, dict[date, float]] = {}
-    for lid, payments in payments_by_loan.items():
-        d: dict[date, float] = defaultdict(float)
-        for pd, amt in payments:
-            d[pd] += amt
-        payments_sum_by_loan_date[lid] = d
+        total_paid = sum(by_date.values())
 
-    defaulters: list[dict] = []
-    for loan in loans:
-        if not loan.start_date:
-            continue
-        if min_loan_start_date and loan.start_date < min_loan_start_date:
-            continue
+        # Build day breakdown
+        days_breakdown = []
+        for i in range(5):
+            check_date = (datetime.utcnow() - timedelta(days=4-i)).date()
+            amount = by_date.get(check_date, 0)
+            days_breakdown.append({
+                "date": str(check_date),
+                "amount": amount,
+            })
 
-        # Only consider loans still within 30-day active window
-        days_since_start = (today - loan.start_date).days
-        if days_since_start < 0:
-            continue
-        if days_since_start > 30:
-            # Past 30 days -> OVERDUE by business rules, not a defaulter
-            continue
+        return {
+            "loan_id": loan_id,
+            "daily_instalment": daily_instalment,
+            "required_5_days": required_5_day,
+            "actual_paid_5_days": total_paid,
+            "is_defaulter": total_paid < required_5_day,
+            "shortfall": max(0, required_5_day - total_paid),
+            "days_breakdown": days_breakdown,
+        }
 
-        remaining = loan.remaining_amount
-        if remaining is None:
-            remaining = loan.total_amount
-        if remaining <= 0:
-            continue
-
-        daily_instalment = float(loan.total_amount) / 30.0
-        sums_map = payments_sum_by_loan_date.get(loan.id, {})
-
-        # Determine the last day to evaluate (cannot go beyond the 30-day window)
-        last_day = min(today, loan.start_date + timedelta(days=29))
-
-        # Walk day-by-day, tracking running expected vs running paid, and the
-        # length of the currently-open streak of "behind schedule" days.
-        expected_total = 0.0
-        paid_total = 0.0
-        current_streak = 0
-        current = loan.start_date
-        while current <= last_day:
-            expected_total += daily_instalment
-            paid_total += sums_map.get(current, 0.0)
-            if paid_total < expected_total - 0.01:  # small tolerance for float rounding
-                current_streak += 1
-            else:
-                current_streak = 0
-            current += timedelta(days=1)
-
-        if current_streak < min_days:
-            continue
-
-        defaulters.append(
-            {
-                "loan_id": loan.id,
-                "customer_name": loan.customer.name if loan.customer else None,
-                "id_number": loan.customer_id,
-                "phone": loan.customer.phone if loan.customer else None,
-                "loan_amount": float(loan.amount or 0),
-                "date_loan_taken": loan.start_date.isoformat() if loan.start_date else None,
-                "loan_balance": float(remaining or 0),
-                "days_defaulted": current_streak,
-            }
+    @staticmethod
+    def get_defaulters(
+        db: Session,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list, int]:
+        """
+        Get all defaulter loans.
+        
+        Defaulter = ACTIVE loan with is_defaulter == true
+        
+        Returns: (loans list, total count)
+        """
+        query = db.query(Loan).filter(
+            Loan.is_defaulter == True,
+            Loan.status == LoanStatus.ACTIVE,
         )
 
-    # Sort: largest consecutive missed days first
-    defaulters.sort(key=lambda row: row["days_defaulted"], reverse=True)
-    return defaulters
+        total = query.count()
+        loans = query.order_by(Loan.defaulter_flagged_date.desc()).limit(limit).offset(offset).all()
+
+        return loans, total
+
+    @staticmethod
+    def get_defaulter_details(db: Session, loan_id: int) -> dict:
+        """
+        Get detailed information about a defaulter loan.
+        
+        Returns analysis of:
+        - Loan details
+        - 5-day payment window
+        - Payment history
+        - When flagged
+        """
+        loan = db.query(Loan).filter(Loan.id == loan_id).first()
+        if not loan:
+            return {}
+
+        if not loan.is_defaulter:
+            return {"message": "Loan is not flagged as defaulter"}
+
+        # 5-day window analysis
+        window = DefaulterService.get_5_day_payment_window(db, loan_id)
+
+        # Recent payments (last 10 days)
+        ten_days_ago = datetime.utcnow() - timedelta(days=10)
+        recent_payments = db.query(Installment).filter(
+            Installment.loan_id == loan_id,
+            Installment.payment_date >= ten_days_ago,
+        ).order_by(Installment.payment_date.desc()).all()
+
+        # Flag history
+        flag_history = db.query(DefaulterFlag).filter(
+            DefaulterFlag.loan_id == loan_id,
+        ).order_by(DefaulterFlag.checked_date.desc()).limit(5).all()
+
+        return {
+            "loan_id": loan_id,
+            "customer_id": loan.customer_id,
+            "amount": loan.amount,
+            "total_amount": loan.total_amount,
+            "remaining_amount": loan.remaining_amount,
+            "status": loan.status.value,
+            "days_since_start": loan.days_since_start,
+            "is_defaulter": loan.is_defaulter,
+            "defaulter_flagged_date": loan.defaulter_flagged_date,
+            "5_day_analysis": window,
+            "recent_payments": [
+                {
+                    "id": p.id,
+                    "amount": p.amount,
+                    "date": p.payment_date,
+                    "method": p.payment_method,
+                }
+                for p in recent_payments
+            ],
+            "flag_history": [
+                {
+                    "action": f.action,
+                    "reason": f.reason,
+                    "required_amount": f.required_amount,
+                    "actual_amount": f.actual_amount,
+                    "checked_date": f.checked_date,
+                }
+                for f in flag_history
+            ],
+        }
+
+    @staticmethod
+    def clear_defaulter_flag(db: Session, loan_id: int) -> bool:
+        """
+        Manually clear defaulter flag (admin only, if loan catches up).
+        
+        Use case: Loan was flagged but customer made catches up on payments.
+        """
+        loan = db.query(Loan).filter(Loan.id == loan_id).first()
+        if not loan:
+            return False
+
+        if not loan.is_defaulter:
+            return False
+
+        # Only clear if customer has caught up (paid enough in last 5 days)
+        is_still_defaulter = DefaulterService.check_loan_is_defaulter(db, loan_id)
+        
+        if is_still_defaulter:
+            return False
+
+        loan.is_defaulter = False
+        db.commit()
+
+        return True
+
+    @staticmethod
+    def get_defaulter_statistics(db: Session) -> dict:
+        """
+        Get statistics about defaulters.
+        
+        Returns:
+        - Total defaulters
+        - Total outstanding on defaulted loans
+        - Average outstanding per defaulter
+        - Defaulters by days overdue
+        """
+        defaulters = db.query(Loan).filter(
+            Loan.is_defaulter == True,
+            Loan.status == LoanStatus.ACTIVE,
+        ).all()
+
+        total = len(defaulters)
+        total_outstanding = sum(d.remaining_amount for d in defaulters)
+        avg_outstanding = total_outstanding / total if total > 0 else 0
+
+        # Group by days since start
+        by_days = {}
+        for d in defaulters:
+            days = d.days_since_start
+            if days not in by_days:
+                by_days[days] = []
+            by_days[days].append(d)
+
+        return {
+            "total_defaulters": total,
+            "total_outstanding": total_outstanding,
+            "average_outstanding_per_defaulter": avg_outstanding,
+            "breakdown_by_days": {
+                str(days): {
+                    "count": len(loans),
+                    "total_outstanding": sum(l.remaining_amount for l in loans),
+                }
+                for days, loans in sorted(by_days.items())
+            },
+        }

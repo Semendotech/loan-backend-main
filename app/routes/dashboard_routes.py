@@ -1,460 +1,343 @@
-import logging
-from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
-from sqlalchemy import and_, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+"""
+CORRECTED Dashboard Routes
+- Metrics based on CORRECT definitions of ACTIVE, OVERDUE, DEFAULTERS
+- ACTIVE = Days 1-30 from creation
+- OVERDUE = Day 31+ from creation (tracked via Arrears)
+- DEFAULTERS = ACTIVE loans with 5-day payment < required amount
+"""
 
-from ..database import get_db
-from ..models import Arrears, Customer, Installment, Loan, LoanStatus
-from ..auth import get_current_user
-from ..services.defaulter_service import get_defaulters
-from ..services.loan_pdf_service import (
-    generate_defaulters_report,
-    generate_overdue_report,
-    generate_payments_report,
-    generate_uncollected_dues_report,
-)
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime, timedelta
+
+from app.database import get_db
+from app.models import Loan, Arrears, Installment, LoanStatus
+from app.services.loan_service import LoanService
+from app.dependencies import get_current_user
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
-logger = logging.getLogger(__name__)
 
-EAT = ZoneInfo("Africa/Nairobi")
 
+# ============ ENDPOINTS ============
 
 @router.get("/metrics")
-async def get_dashboard_metrics(
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+def get_dashboard_metrics(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Get dashboard KPI metrics."""
-    try:
-        # Count active loans
-        active_result = await db.execute(
-            select(func.count(Loan.id), func.coalesce(func.sum(Loan.remaining_amount), 0.0))
-            .where(Loan.status == LoanStatus.ACTIVE)
-        )
-        active_count, active_outstanding = active_result.one()
-        active_count = active_count or 0
-        active_outstanding = float(active_outstanding or 0)
+    """
+    Get dashboard key metrics.
+    
+    ACTIVE LOANS (Days 1-30):
+    - active_loans: count of loans with status == ACTIVE
+    - active_loans_outstanding: sum of remaining_amount for ACTIVE loans
+    
+    OVERDUE LOANS (Day 31+):
+    - overdue_loans: count of Arrears with is_cleared == false
+    - overdue_outstanding: sum of remaining_amount from Arrears
+    
+    DEFAULTERS (Subset of ACTIVE):
+    - defaulters: count of is_defaulter == true AND status == ACTIVE
+    
+    COMPLETED:
+    - completed_loans: count of status == COMPLETED
+    - completed_amount: total_amount of completed loans
+    """
+    # Sync all loans first
+    LoanService.daily_sync_all_loans(db)
 
-        # Count overdue/arrears
-        overdue_result = await db.execute(
-            select(func.count(Arrears.id), func.coalesce(func.sum(Arrears.remaining_amount), 0.0))
-            .where(Arrears.is_cleared == False)
-        )
-        overdue_count, overdue_outstanding = overdue_result.one()
-        overdue_count = overdue_count or 0
-        overdue_outstanding = float(overdue_outstanding or 0)
+    # Get metrics
+    metrics = LoanService.get_loan_dashboard_metrics(db)
 
-        # Count completed loans this month
-        today = datetime.now(EAT).date()
-        month_start = today.replace(day=1)
-        month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-
-        completed_result = await db.execute(
-            select(func.count(Loan.id), func.coalesce(func.sum(Loan.total_amount), 0.0))
-            .where(
-                Loan.status == LoanStatus.COMPLETED,
-                Loan.completed_at >= datetime.combine(month_start, time.min),
-                Loan.completed_at <= datetime.combine(month_end, time.max),
-            )
-        )
-        completed_count, completed_amount = completed_result.one()
-        completed_count = completed_count or 0
-        completed_amount = float(completed_amount or 0)
-
-        # Count total customers
-        customer_result = await db.execute(select(func.count(Customer.id)))
-        total_customers = customer_result.scalar() or 0
-
-        # Get defaulters count
-        defaulters = await get_defaulters(db)
-        defaulters_count = len(defaulters)
-
-        # Calculate interest for completed loans in last 3 months
-        three_months_ago = today - timedelta(days=90)
-        interest_result = await db.execute(
-            select(func.coalesce(func.sum(Loan.total_amount - Loan.amount), 0.0))
-            .where(
-                Loan.status == LoanStatus.COMPLETED,
-                Loan.completed_at >= datetime.combine(three_months_ago, time.min),
-            )
-        )
-        interest_earned = float(interest_result.scalar() or 0)
-
-        return {
-            "active_loans": active_count,
-            "active_loans_outstanding": active_outstanding,
-            "overdue_loans": overdue_count,
-            "overdue_outstanding": overdue_outstanding,
-            "completed_loans_this_month": completed_count,
-            "completed_amount_this_month": completed_amount,
-            "total_customers": total_customers,
-            "defaulters_count": defaulters_count,
-            "interest_last_three_months": interest_earned,
-        }
-    except Exception as e:
-        logger.exception("Error fetching dashboard metrics")
-        raise HTTPException(status_code=500, detail=str(e))
+    return metrics
 
 
 @router.get("/summary")
-async def get_dashboard_summary(
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+def get_dashboard_summary(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Get dashboard summary for current period."""
-    try:
-        today = datetime.now(EAT).date()
-        
-        # Payments today
-        today_result = await db.execute(
-            select(func.coalesce(func.sum(Installment.amount), 0.0))
-            .where(
-                func.date(Installment.payment_date) == today
-            )
-        )
-        total_paid_today = float(today_result.scalar() or 0)
+    """
+    Get dashboard summary with time-based metrics.
+    
+    Includes:
+    - Last 3 months completed loans
+    - This month active loans
+    - Interest earned
+    - Daily/weekly/monthly collection totals
+    """
+    # Sync all loans
+    LoanService.daily_sync_all_loans(db)
 
-        # Payments this week
-        week_start = today - timedelta(days=today.weekday())
-        week_result = await db.execute(
-            select(func.coalesce(func.sum(Installment.amount), 0.0))
-            .where(
-                func.date(Installment.payment_date) >= week_start,
-                func.date(Installment.payment_date) <= today,
-            )
-        )
-        total_paid_week = float(week_result.scalar() or 0)
+    now = datetime.utcnow()
+    three_months_ago = now - timedelta(days=90)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    week_start = now - timedelta(days=now.weekday())
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Payments this month
-        month_start = today.replace(day=1)
-        month_result = await db.execute(
-            select(func.coalesce(func.sum(Installment.amount), 0.0))
-            .where(
-                func.date(Installment.payment_date) >= month_start,
-                func.date(Installment.payment_date) <= today,
-            )
-        )
-        total_paid_month = float(month_result.scalar() or 0)
+    # Completed loans in last 3 months
+    completed_last_3_months = db.query(func.count(Loan.id)).filter(
+        Loan.status == LoanStatus.COMPLETED,
+        Loan.completed_at >= three_months_ago,
+    ).scalar()
 
-        # Active loans this month
-        month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-        active_this_month = await db.execute(
-            select(func.count(Loan.id))
-            .where(
-                Loan.status == LoanStatus.ACTIVE,
-                Loan.created_at >= datetime.combine(month_start, time.min),
-                Loan.created_at <= datetime.combine(month_end, time.max),
-            )
-        )
-        active_count_this_month = active_this_month.scalar() or 0
+    completed_amount_3_months = db.query(func.sum(Loan.total_amount)).filter(
+        Loan.status == LoanStatus.COMPLETED,
+        Loan.completed_at >= three_months_ago,
+    ).scalar() or 0
 
-        # Completed loans this month
-        completed_this_month = await db.execute(
-            select(func.count(Loan.id))
-            .where(
-                Loan.status == LoanStatus.COMPLETED,
-                Loan.completed_at >= datetime.combine(month_start, time.min),
-                Loan.completed_at <= datetime.combine(month_end, time.max),
-            )
-        )
-        completed_count_this_month = completed_this_month.scalar() or 0
+    # Active loans created this month
+    active_this_month = db.query(func.count(Loan.id)).filter(
+        Loan.status == LoanStatus.ACTIVE,
+        Loan.start_date >= month_start,
+    ).scalar()
 
-        # Arrears count (overdue not cleared)
-        arrears_result = await db.execute(
-            select(func.count(Arrears.id))
-            .where(Arrears.is_cleared == False)
-        )
-        arrears_count = arrears_result.scalar() or 0
+    # Interest earned (sum of completed loans' interest)
+    interest_earned = db.query(
+        func.sum(Loan.total_amount - Loan.amount)
+    ).filter(
+        Loan.status == LoanStatus.COMPLETED,
+        Loan.completed_at >= three_months_ago,
+    ).scalar() or 0
 
-        return {
-            "total_paid_today": total_paid_today,
-            "total_paid_this_week": total_paid_week,
-            "total_paid_this_month": total_paid_month,
-            "active_loans_count_this_month": active_count_this_month,
-            "completed_loans_count_this_month": completed_count_this_month,
-            "arrears_count_this_month": arrears_count,
-        }
-    except Exception as e:
-        logger.exception("Error fetching dashboard summary")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Collections
+    payments_today = db.query(func.sum(Installment.amount)).filter(
+        Installment.payment_date >= today_start,
+    ).scalar() or 0
 
+    payments_this_week = db.query(func.sum(Installment.amount)).filter(
+        Installment.payment_date >= week_start,
+    ).scalar() or 0
 
-@router.get("/defaulters")
-async def list_defaulters(
-    limit: int = Query(1000, le=10000),
-    offset: int = Query(0),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    """Get list of defaulters with pagination."""
-    try:
-        defaulters = await get_defaulters(db)
-        paginated = defaulters[offset : offset + limit]
-        
-        return {
-            "items": paginated,
-            "total": len(defaulters),
-            "limit": limit,
-            "offset": offset,
-            "has_more": len(defaulters) > offset + limit,
-        }
-    except Exception as e:
-        logger.exception("Error fetching defaulters")
-        raise HTTPException(status_code=500, detail=str(e))
+    payments_this_month = db.query(func.sum(Installment.amount)).filter(
+        Installment.payment_date >= month_start,
+    ).scalar() or 0
+
+    return {
+        "completed_count_last_3_months": completed_last_3_months,
+        "completed_amount_last_3_months": completed_amount_3_months,
+        "active_loans_count_this_month": active_this_month,
+        "interest_earned_last_3_months": interest_earned,
+        "payments_collected_today": payments_today,
+        "payments_collected_this_week": payments_this_week,
+        "payments_collected_this_month": payments_this_month,
+    }
 
 
 @router.get("/trends")
-async def get_loan_trends(
-    days: int = Query(30, ge=1, le=365),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+def get_trends(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Get loan creation and completion trends."""
-    try:
-        today = datetime.now(EAT).date()
-        start_date = today - timedelta(days=days)
+    """
+    Get trends over time.
+    
+    Returns:
+    - Daily active loans (last 30 days)
+    - Daily completions (last 30 days)
+    - Daily defaulters (last 30 days)
+    """
+    now = datetime.utcnow()
+    thirty_days_ago = now - timedelta(days=30)
 
-        creation_result = await db.execute(
-            select(func.date(Loan.created_at).label("date"), func.count(Loan.id))
-            .where(func.date(Loan.created_at) >= start_date)
-            .group_by(func.date(Loan.created_at))
-            .order_by(func.date(Loan.created_at))
-        )
-        creation_data = creation_result.all()
+    # Loans by creation date (last 30 days)
+    daily_created = db.query(
+        func.date(Loan.start_date).label("date"),
+        func.count(Loan.id).label("count"),
+    ).filter(
+        Loan.start_date >= thirty_days_ago,
+    ).group_by(
+        func.date(Loan.start_date),
+    ).all()
 
-        completion_result = await db.execute(
-            select(func.date(Loan.completed_at).label("date"), func.count(Loan.id))
-            .where(
-                Loan.status == LoanStatus.COMPLETED,
-                func.date(Loan.completed_at) >= start_date,
-            )
-            .group_by(func.date(Loan.completed_at))
-            .order_by(func.date(Loan.completed_at))
-        )
-        completion_data = completion_result.all()
+    # Loans completed (last 30 days)
+    daily_completed = db.query(
+        func.date(Loan.completed_at).label("date"),
+        func.count(Loan.id).label("count"),
+    ).filter(
+        Loan.completed_at >= thirty_days_ago,
+    ).group_by(
+        func.date(Loan.completed_at),
+    ).all()
 
-        return {
-            "period_days": days,
-            "creation_trend": [{"date": str(d[0]), "count": d[1]} for d in creation_data],
-            "completion_trend": [{"date": str(d[0]), "count": d[1]} for d in completion_data],
-        }
-    except Exception as e:
-        logger.exception("Error fetching loan trends")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Defaulters by flagged date (last 30 days)
+    daily_defaulters = db.query(
+        func.date(Loan.defaulter_flagged_date).label("date"),
+        func.count(Loan.id).label("count"),
+    ).filter(
+        Loan.defaulter_flagged_date >= thirty_days_ago,
+    ).group_by(
+        func.date(Loan.defaulter_flagged_date),
+    ).all()
+
+    return {
+        "daily_created": [{"date": str(d[0]), "count": d[1]} for d in daily_created],
+        "daily_completed": [{"date": str(d[0]), "count": d[1]} for d in daily_completed],
+        "daily_defaulters": [{"date": str(d[0]), "count": d[1]} for d in daily_defaulters],
+    }
 
 
-@router.get("/payments-report")
-async def get_payments_report(
-    report_date: date = Query(None),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+@router.get("/defaulters")
+def get_defaulters_list(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Get payments with arrears column."""
-    if report_date is None:
-        report_date = datetime.now(EAT).date()
+    """
+    Get list of defaulter loans.
+    
+    Definition: ACTIVE loans with is_defaulter == true
+    
+    Returns: Loans flagged as defaulters with details
+    """
+    query = db.query(Loan).filter(
+        Loan.is_defaulter == True,
+        Loan.status == LoanStatus.ACTIVE,
+    )
 
-    try:
-        payments_result = await db.execute(
-            select(Installment)
-            .options(selectinload(Installment.loan).selectinload(Loan.customer))
-            .where(func.date(Installment.payment_date) == report_date)
-            .order_by(Installment.payment_date.desc())
-        )
-        payments = payments_result.scalars().all()
+    total = query.count()
+    defaulters = query.order_by(Loan.defaulter_flagged_date.desc()).limit(limit).offset(offset).all()
 
-        items = []
-        total_paid = 0.0
-
-        for payment in payments:
-            loan = payment.loan
-            customer = loan.customer if loan else None
-
-            if not loan or not customer:
-                continue
-
-            daily_instalment = float(loan.total_amount) / 30.0
-            arrears_amount = max(0.0, daily_instalment - float(payment.amount))
-
-            item = {
-                "installment_id": payment.id,
-                "loan_id": loan.id,
-                "customer_name": customer.name,
-                "customer_id": customer.id_number,
-                "customer_phone": customer.phone,
-                "amount": float(payment.amount),
-                "daily_instalment": round(daily_instalment, 2),
-                "arrears": round(arrears_amount, 2),
-                "payment_date": payment.payment_date,
-                "recorded_by": payment.recorded_by or "System",
-                "loan_balance": float(loan.remaining_amount or 0),
-                "source": payment.source,
+    return {
+        "items": [
+            {
+                "id": d.id,
+                "customer_id": d.customer_id,
+                "amount": d.amount,
+                "total_amount": d.total_amount,
+                "remaining_amount": d.remaining_amount,
+                "daily_instalment": d.daily_instalment,
+                "days_since_start": d.days_since_start,
+                "status": d.status.value,
+                "is_defaulter": d.is_defaulter,
+                "defaulter_flagged_date": d.defaulter_flagged_date,
             }
-            items.append(item)
-            total_paid += float(payment.amount)
-
-        return {
-            "report_date": str(report_date),
-            "total_payments": len(items),
-            "total_amount_paid": round(total_paid, 2),
-            "items": items,
-        }
-    except Exception as e:
-        logger.exception("Error fetching payments report")
-        raise HTTPException(status_code=500, detail=str(e))
+            for d in defaulters
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
-@router.get("/payments-report/pdf")
-async def download_payments_report(
-    report_date: date = Query(None),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+# ============ REPORT ENDPOINTS ============
+
+@router.get("/reports/active-loans-summary")
+def active_loans_report(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Download payments report as PDF."""
-    if report_date is None:
-        report_date = datetime.now(EAT).date()
+    """
+    Summary report of active loans.
+    
+    Shows:
+    - Total active loans
+    - Total outstanding (all active loans)
+    - Breakdown by customer
+    """
+    active_loans = db.query(Loan).filter(
+        Loan.status == LoanStatus.ACTIVE,
+    ).all()
 
-    try:
-        payments_result = await db.execute(
-            select(Installment)
-            .options(selectinload(Installment.loan).selectinload(Loan.customer))
-            .where(func.date(Installment.payment_date) == report_date)
-            .order_by(Installment.payment_date.desc())
-        )
-        payments = payments_result.scalars().all()
+    total_active = len(active_loans)
+    total_outstanding = sum(l.remaining_amount for l in active_loans)
+    avg_remaining = total_outstanding / total_active if total_active > 0 else 0
 
-        filepath, filename = generate_payments_report(payments, report_date)
-        return FileResponse(filepath, media_type="application/pdf", filename=filename)
-    except Exception as e:
-        logger.exception("Error downloading payments report")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "total_active_loans": total_active,
+        "total_outstanding": total_outstanding,
+        "average_remaining_per_loan": avg_remaining,
+        "loans": [
+            {
+                "id": l.id,
+                "customer_id": l.customer_id,
+                "amount": l.amount,
+                "remaining_amount": l.remaining_amount,
+                "days_since_start": l.days_since_start,
+            }
+            for l in active_loans
+        ],
+    }
 
 
-@router.get("/overdue-report/pdf")
-async def download_overdue_report(
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+@router.get("/reports/overdue-summary")
+def overdue_report(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Download overdue loans report as PDF."""
-    try:
-        result = await db.execute(
-            select(Arrears)
-            .options(selectinload(Arrears.loan), selectinload(Arrears.customer))
-            .where(Arrears.is_cleared == False)
-            .order_by(Arrears.arrears_date)
-        )
-        arrears = result.scalars().all()
+    """
+    Summary report of overdue loans.
+    
+    Shows:
+    - Total overdue loans
+    - Total outstanding on overdue loans
+    - Breakdown by customer
+    """
+    overdue_arrears = db.query(Arrears).filter(
+        Arrears.is_cleared == False,
+    ).all()
 
-        filepath, filename = generate_overdue_report(arrears)
-        return FileResponse(filepath, media_type="application/pdf", filename=filename)
-    except Exception as e:
-        logger.exception("Error downloading overdue report")
-        raise HTTPException(status_code=500, detail=str(e))
+    total_overdue = len(overdue_arrears)
+    total_outstanding = sum(a.remaining_amount for a in overdue_arrears)
+    avg_remaining = total_outstanding / total_overdue if total_overdue > 0 else 0
+
+    return {
+        "total_overdue_loans": total_overdue,
+        "total_outstanding": total_outstanding,
+        "average_remaining_per_loan": avg_remaining,
+        "arrears": [
+            {
+                "id": a.id,
+                "loan_id": a.loan_id,
+                "customer_id": a.customer_id,
+                "original_amount": a.original_amount,
+                "remaining_amount": a.remaining_amount,
+                "arrears_date": a.arrears_date,
+                "days_overdue": (datetime.utcnow() - a.arrears_date).days,
+            }
+            for a in overdue_arrears
+        ],
+    }
 
 
-@router.get("/defaulters-report/pdf")
-async def download_defaulters_report(
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+@router.get("/reports/defaulters-summary")
+def defaulters_report(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Download defaulters report as PDF."""
-    try:
-        defaulters = await get_defaulters(db)
-        filepath, filename = generate_defaulters_report(defaulters)
-        return FileResponse(filepath, media_type="application/pdf", filename=filename)
-    except Exception as e:
-        logger.exception("Error downloading defaulters report")
-        raise HTTPException(status_code=500, detail=str(e))
+    """
+    Summary report of defaulter loans.
+    
+    Definition: ACTIVE loans with is_defaulter == true
+    
+    Shows:
+    - Total defaulters
+    - Total outstanding on defaulted loans
+    """
+    defaulters = db.query(Loan).filter(
+        Loan.is_defaulter == True,
+        Loan.status == LoanStatus.ACTIVE,
+    ).all()
 
+    total_defaulters = len(defaulters)
+    total_outstanding = sum(d.remaining_amount for d in defaulters)
+    avg_remaining = total_outstanding / total_defaulters if total_defaulters > 0 else 0
 
-@router.get("/uncollected-dues")
-async def get_uncollected_dues(
-    report_date: date = Query(None),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    """Get all unpaid daily instalments."""
-    if report_date is None:
-        report_date = datetime.now(EAT).date()
-
-    try:
-        loans_result = await db.execute(
-            select(Loan)
-            .options(selectinload(Loan.customer), selectinload(Loan.installments))
-            .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]))
-            .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
-        )
-        loans = loans_result.scalars().all()
-
-        items = []
-        total_uncollected = 0.0
-
-        for loan in loans:
-            if not loan.customer or not loan.start_date:
-                continue
-
-            days_elapsed = (report_date - loan.start_date).days + 1
-            days_elapsed = min(days_elapsed, 30)
-
-            daily_instalment = float(loan.total_amount) / 30.0
-            expected_payment = daily_instalment * days_elapsed
-            actual_paid = float(loan.total_amount) - float(loan.remaining_amount or 0)
-            uncollected = max(0.0, expected_payment - actual_paid)
-
-            if uncollected > 0:
-                item = {
-                    "loan_id": loan.id,
-                    "customer_name": loan.customer.name,
-                    "customer_phone": loan.customer.phone,
-                    "daily_instalment": round(daily_instalment, 2),
-                    "days_elapsed": days_elapsed,
-                    "expected_payment": round(expected_payment, 2),
-                    "actual_paid": round(actual_paid, 2),
-                    "uncollected_dues": round(uncollected, 2),
-                    "loan_balance": float(loan.remaining_amount or 0),
-                    "status": loan.status.value,
-                }
-                items.append(item)
-                total_uncollected += uncollected
-
-        items.sort(key=lambda x: x["uncollected_dues"], reverse=True)
-
-        return {
-            "report_date": str(report_date),
-            "total_loans_with_dues": len(items),
-            "total_uncollected_dues": round(total_uncollected, 2),
-            "items": items,
-        }
-    except Exception as e:
-        logger.exception("Error fetching uncollected dues")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/uncollected-dues/pdf")
-async def download_uncollected_dues_report(
-    report_date: date = Query(None),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    """Download uncollected dues report as PDF."""
-    if report_date is None:
-        report_date = datetime.now(EAT).date()
-
-    try:
-        loans_result = await db.execute(
-            select(Loan)
-            .options(selectinload(Loan.customer))
-            .where(Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]))
-            .where(or_(Loan.remaining_amount.is_(None), Loan.remaining_amount > 0))
-        )
-        loans = loans_result.scalars().all()
-
-        filepath, filename = generate_uncollected_dues_report(loans, report_date)
-        return FileResponse(filepath, media_type="application/pdf", filename=filename)
-    except Exception as e:
-        logger.exception("Error downloading uncollected dues report")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "total_defaulters": total_defaulters,
+        "total_outstanding": total_outstanding,
+        "average_remaining_per_loan": avg_remaining,
+        "defaulters": [
+            {
+                "id": d.id,
+                "customer_id": d.customer_id,
+                "amount": d.amount,
+                "remaining_amount": d.remaining_amount,
+                "days_since_start": d.days_since_start,
+                "flagged_date": d.defaulter_flagged_date,
+            }
+            for d in defaulters
+        ],
+    }
