@@ -45,7 +45,6 @@ def get_dashboard_metrics(
     - completed_amount: total_amount of completed loans
     """
     # Sync all loans first
-    LoanService.daily_sync_all_loans(db)
 
     # Get metrics
     metrics = LoanService.get_loan_dashboard_metrics(db)
@@ -68,7 +67,6 @@ def get_dashboard_summary(
     - Daily/weekly/monthly collection totals
     """
     # Sync all loans
-    LoanService.daily_sync_all_loans(db)
 
     now = datetime.utcnow()
     three_months_ago = now - timedelta(days=90)
@@ -341,5 +339,6 @@ def defaulters_report(
             for d in defaulters
         ],
     }
+
 
 
