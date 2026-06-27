@@ -18,6 +18,19 @@ from app.auth import get_current_user
 
 router = APIRouter(prefix="/loans", tags=["loans"])
 
+# Cache to ensure daily_sync runs at most once per day
+_last_sync_date: object = None
+
+
+def _maybe_sync(db):
+    """Run daily_sync_all_loans at most once per calendar day."""
+    global _last_sync_date
+    from datetime import date
+    today = date.today()
+    if _last_sync_date != today:
+        LoanService.daily_sync_all_loans(db)
+        _last_sync_date = today
+
 
 # ============ SCHEMAS ============
 
@@ -120,8 +133,8 @@ def get_active_loans(
     This ensures loans are shown during their active 30-day period,
     regardless of when due_date was calculated.
     """
-    # Sync all loans first (update statuses if any hit day 31)
-    LoanService.daily_sync_all_loans(db)
+    # Sync loans at most once per day
+    _maybe_sync(db)
 
     loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset)
 
