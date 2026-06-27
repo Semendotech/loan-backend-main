@@ -42,11 +42,9 @@ def upgrade():
         sa.Column("actual_amount", sa.Float(), nullable=True),
         sa.Column("checked_date", sa.DateTime(), nullable=True),
     )
-    op.create_index("ix_defaulter_flags_id", "defaulter_flags", ["id"])
 
 
 def downgrade():
-    op.drop_index("ix_defaulter_flags_id", table_name="defaulter_flags")
     op.drop_table("defaulter_flags")
 
     op.drop_column("arrears", "updated_at")
