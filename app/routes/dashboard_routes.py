@@ -225,17 +225,33 @@ def get_defaulters_list(
     total = query.count()
     defaulters = query.order_by(Loan.defaulter_flagged_date.desc()).limit(limit).offset(offset).all()
 
+    from datetime import datetime as _dt
+
+    def _days_defaulted(loan):
+        if not loan.defaulter_flagged_date:
+            return loan.days_since_start
+        flagged = loan.defaulter_flagged_date.date() if hasattr(loan.defaulter_flagged_date, "date") else loan.defaulter_flagged_date
+        return (_dt.utcnow().date() - flagged).days
+
     return {
         "items": [
             {
                 "id": d.id,
+                "loan_id": d.id,
                 "customer_id": d.customer_id,
+                "id_number": d.customer.id_number if d.customer else d.customer_id,
+                "customer_name": d.customer.name if d.customer else None,
+                "phone": d.customer.phone if d.customer else None,
                 "amount": d.amount,
+                "loan_amount": d.amount,
                 "total_amount": d.total_amount,
                 "remaining_amount": d.remaining_amount,
+                "loan_balance": d.remaining_amount,
                 "daily_instalment": d.daily_instalment,
                 "days_since_start": d.days_since_start,
+                "days_defaulted": _days_defaulted(d),
                 "start_date": d.start_date,
+                "date_loan_taken": d.start_date,
                 "status": d.status.value,
                 "is_defaulter": d.is_defaulter,
                 "defaulter_flagged_date": d.defaulter_flagged_date,
