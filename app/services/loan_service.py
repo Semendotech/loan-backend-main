@@ -100,9 +100,14 @@ class LoanService:
         if loan.arrears:
             return loan.arrears  # Already exists
 
+        from app.models import Customer
+        customer = db.query(Customer).filter(Customer.id_number == loan.customer_id).first()
+        if not customer:
+            raise ValueError(f"Customer with id_number {loan.customer_id!r} not found for loan {loan.id}")
+
         arrears = Arrears(
             loan_id=loan.id,
-            customer_id=loan.customer_id,
+            customer_id=customer.id,
             original_amount=loan.remaining_amount,
             remaining_amount=loan.remaining_amount,
             is_cleared=False,
@@ -452,9 +457,16 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
         status_changed = True
 
     if expected_status == LoanStatus.OVERDUE and not loan.arrears:
+        from app.models import Customer
+        from sqlalchemy import select as sa_select_local
+        cust_result = await db.execute(sa_select_local(Customer).filter(Customer.id_number == loan.customer_id))
+        customer = cust_result.scalar_one_or_none()
+        if not customer:
+            raise ValueError(f"Customer with id_number {loan.customer_id!r} not found for loan {loan.id}")
+
         arrears = Arrears(
             loan_id=loan.id,
-            customer_id=loan.customer_id,
+            customer_id=customer.id,
             original_amount=loan.remaining_amount,
             remaining_amount=loan.remaining_amount,
             is_cleared=False,
