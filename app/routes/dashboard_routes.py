@@ -12,7 +12,7 @@ from sqlalchemy import func
 from datetime import datetime, timedelta
 
 from app.database import get_sync_db
-from app.models import Loan, Arrears, Installment, LoanStatus
+from app.models import Loan, Arrears, Installment, LoanStatus, Customer
 from app.services.loan_service import LoanService
 from app.auth import get_current_user
 
@@ -112,7 +112,31 @@ def get_dashboard_summary(
         Installment.payment_date >= month_start,
     ).scalar() or 0
 
+    # Completed loans amount specifically THIS month (not last 3 months)
+    completed_amount_this_month = db.query(func.sum(Loan.total_amount)).filter(
+        Loan.status == LoanStatus.COMPLETED,
+        Loan.completed_at >= month_start,
+    ).scalar() or 0
+
+    # Overdue count (last 3 months window, to match frontend's expected field)
+    overdue_count_last_three_months = db.query(func.count(Arrears.id)).filter(
+        Arrears.is_cleared == False,
+        Arrears.arrears_date >= three_months_ago,
+    ).scalar() or 0
+
+    # Total customers in the system
+    total_customers = db.query(func.count(Customer.id)).scalar() or 0
+
     return {
+        # Frontend-expected field names
+        "total_paid_today": payments_today,
+        "total_paid_this_week": payments_this_week,
+        "total_paid_this_month": payments_this_month,
+        "completed_loans_amount_this_month": completed_amount_this_month,
+        "interest_last_three_months": interest_earned,
+        "total_customers": total_customers,
+        "overdue_count_last_three_months": overdue_count_last_three_months,
+        "arrears_count_last_three_months": overdue_count_last_three_months,
         "completed_count_last_3_months": completed_last_3_months,
         "completed_amount_last_3_months": completed_amount_3_months,
         "active_loans_count_this_month": active_this_month,
