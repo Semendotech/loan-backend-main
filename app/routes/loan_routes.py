@@ -133,15 +133,12 @@ def get_active_loans(
     This ensures loans are shown during their active 30-day period,
     regardless of when due_date was calculated.
     """
-    # Sync loans at most once per day
     import traceback
     try:
-        pass
+        loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset)
     except Exception as e:
-        print(traceback.format_exc())
-        raise
-
-    loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset)
+        print('ACTIVE ERROR:', traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
     def _to_response(loan):
         resp = LoanResponse.from_orm(loan)
