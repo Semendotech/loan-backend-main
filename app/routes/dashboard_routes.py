@@ -342,3 +342,165 @@ def defaulters_report(
 
 
 
+
+
+# ============ UNCOLLECTED DUES ============
+
+def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
+    """
+    Shared logic for the JSON and PDF report endpoints.
+
+    Definition: ACTIVE loans where the instalment due for the selected date
+    (end_date) has not been received, i.e. no payment recorded on that date
+    covering at least the loan's daily_instalment. skipped_days = number of
+    consecutive days (ending at end_date, within the loan's 30-day active
+    window) where the daily instalment was not fully covered.
+    """
+    target_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+
+    loans = db.query(Loan).filter(
+        Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
+    ).all()
+
+    items = []
+    for loan in loans:
+        if not loan.start_date:
+            continue
+        start = loan.start_date.date() if isinstance(loan.start_date, datetime) else loan.start_date
+        if target_date < start:
+            continue
+        # Only consider days within the 30-day active window
+        last_day = min(target_date, start + timedelta(days=29))
+        if target_date > last_day:
+            continue
+
+        daily_instalment = loan.daily_instalment
+
+        installments = db.query(Installment).filter(
+            Installment.loan_id == loan.id,
+            func.date(Installment.payment_date) >= start,
+            func.date(Installment.payment_date) <= target_date,
+        ).all()
+
+        sums_by_date = {}
+        for inst in installments:
+            d = inst.payment_date.date() if isinstance(inst.payment_date, datetime) else inst.payment_date
+            sums_by_date[d] = sums_by_date.get(d, 0.0) + float(inst.amount or 0)
+
+        # Was the target date's instalment covered?
+        paid_on_target = sums_by_date.get(target_date, 0.0)
+        if paid_on_target >= daily_instalment - 0.01:
+            continue  # fully covered, not an uncollected due
+
+        # Compute skipped_days: consecutive missed days ending at target_date
+        skipped_days = 0
+        current = target_date
+        while current >= start:
+            paid = sums_by_date.get(current, 0.0)
+            if paid < daily_instalment - 0.01:
+                skipped_days += 1
+                current -= timedelta(days=1)
+            else:
+                break
+
+        customer = loan.customer
+        items.append({
+            "loan_id": loan.id,
+            "customer_name": customer.name if customer else None,
+            "customer_phone": customer.phone if customer else None,
+            "customer_id_number": loan.customer_id,
+            "daily_instalment": daily_instalment,
+            "loan_balance": float(loan.remaining_amount if loan.remaining_amount is not None else loan.total_amount),
+            "skipped_days": skipped_days,
+        })
+
+    items.sort(key=lambda r: r["skipped_days"], reverse=True)
+    return items
+
+
+@router.get("/uncollected-dues")
+def get_uncollected_dues(
+    start_date: str,
+    end_date: str,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get active/overdue loans whose instalment for `end_date` has not been
+    collected, with how many consecutive days they've been skipped.
+    """
+    items = _calc_uncollected_dues(db, start_date, end_date)
+    total = len(items)
+    page = items[offset:offset + limit]
+
+    return {
+        "items": page,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/uncollected-dues-report")
+def get_uncollected_dues_report(
+    start_date: str,
+    end_date: str,
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    PDF report of uncollected dues for the given date.
+    """
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+
+    items = _calc_uncollected_dues(db, start_date, end_date)
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("Uncollected Dues Report", styles["Title"]))
+    story.append(Paragraph(f"As of: {end_date}", styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    table_data = [["Customer", "Phone", "Daily Instalment", "Loan Balance", "Skipped Days"]]
+    for row in items:
+        table_data.append([
+            row["customer_name"] or "-",
+            row["customer_phone"] or "-",
+            f"{row['daily_instalment']:.2f}",
+            f"{row['loan_balance']:.2f}",
+            str(row["skipped_days"]),
+        ])
+
+    if len(table_data) == 1:
+        story.append(Paragraph("All dues have been collected for this date.", styles["Normal"]))
+    else:
+        tbl = Table(table_data, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+        ]))
+        story.append(tbl)
+
+    doc.build(story)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=uncollected_dues_report_{end_date}.pdf"
+        },
+    )
