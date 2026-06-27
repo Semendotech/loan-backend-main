@@ -393,7 +393,8 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
     target_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
 
     # Load all active/overdue loans in one query
-    loans = db.query(Loan).filter(
+    from sqlalchemy.orm import selectinload
+    loans = db.query(Loan).options(selectinload(Loan.customer)).filter(
         Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
     ).all()
 
