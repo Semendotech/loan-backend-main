@@ -214,7 +214,10 @@ def get_defaulters_list(
     
     Returns: Loans flagged as defaulters with details
     """
-    query = db.query(Loan).filter(
+    from sqlalchemy.orm import selectinload
+    from app.models import Customer
+
+    query = db.query(Loan).options(selectinload(Loan.customer)).filter(
         Loan.is_defaulter == True,
         Loan.status == LoanStatus.ACTIVE,
     )
@@ -232,9 +235,16 @@ def get_defaulters_list(
                 "remaining_amount": d.remaining_amount,
                 "daily_instalment": d.daily_instalment,
                 "days_since_start": d.days_since_start,
+                "start_date": d.start_date,
                 "status": d.status.value,
                 "is_defaulter": d.is_defaulter,
                 "defaulter_flagged_date": d.defaulter_flagged_date,
+                "customer": ({
+                    "name": d.customer.name,
+                    "id_number": d.customer.id_number,
+                    "phone": d.customer.phone,
+                    "location": d.customer.location,
+                } if d.customer else None),
             }
             for d in defaulters
         ],
