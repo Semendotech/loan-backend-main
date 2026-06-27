@@ -134,7 +134,7 @@ def get_active_loans(
     regardless of when due_date was calculated.
     """
     # Sync loans at most once per day
-    _maybe_sync(db)
+    pass  # sync disabled
 
     loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset)
 
