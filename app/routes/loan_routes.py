@@ -29,6 +29,16 @@ class LoanRequest(BaseModel):
         from_attributes = True
 
 
+class CustomerBrief(BaseModel):
+    id_number: str
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class LoanResponse(BaseModel):
     id: int
     customer_id: str
@@ -45,6 +55,7 @@ class LoanResponse(BaseModel):
     days_since_start: int
     daily_instalment: float
     created_at: datetime
+    customer: Optional[CustomerBrief] = None
 
     class Config:
         from_attributes = True
@@ -53,6 +64,7 @@ class LoanResponse(BaseModel):
 class LoanListResponse(BaseModel):
     items: list[LoanResponse]
     total: int
+    count: int
     limit: int
     offset: int
     has_more: bool
@@ -113,9 +125,16 @@ def get_active_loans(
 
     loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset)
 
+    def _to_response(loan):
+        resp = LoanResponse.from_orm(loan)
+        if loan.customer:
+            resp.customer = CustomerBrief.from_orm(loan.customer)
+        return resp
+
     return LoanListResponse(
-        items=[LoanResponse.from_orm(loan) for loan in loans],
+        items=[_to_response(loan) for loan in loans],
         total=total,
+        count=total,
         limit=limit,
         offset=offset,
         has_more=(offset + limit) < total,
