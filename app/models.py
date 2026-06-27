@@ -79,6 +79,9 @@ class Loan(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     arrears_since = Column(DateTime, nullable=True)
+    is_defaulter = Column(Boolean, default=False, nullable=False)
+    defaulter_flagged_date = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     customer = orm_relationship("Customer", back_populates="loans")
@@ -108,6 +111,31 @@ class Loan(Base):
         elif not kwargs.get('due_date'):
             self.due_date = datetime.utcnow().date() + timedelta(days=30)
 
+    @property
+    def days_since_start(self) -> int:
+        if not self.start_date:
+            return 0
+        today = datetime.utcnow().date()
+        start = self.start_date.date() if isinstance(self.start_date, datetime) else self.start_date
+        return (today - start).days
+
+    @property
+    def daily_instalment(self) -> float:
+        return float(self.total_amount or 0) / 30.0
+
+    @property
+    def is_active_period(self) -> bool:
+        return 0 <= self.days_since_start <= 30
+
+    @property
+    def status_should_be(self):
+        remaining = self.remaining_amount if self.remaining_amount is not None else self.total_amount
+        if remaining is not None and remaining <= 0:
+            return LoanStatus.COMPLETED
+        if self.days_since_start > 30:
+            return LoanStatus.OVERDUE
+        return LoanStatus.ACTIVE
+
 class Installment(Base):
     __tablename__ = "installments"
 
@@ -117,6 +145,8 @@ class Installment(Base):
     payment_date = Column(DateTime, default=datetime.utcnow, nullable=False)
     recorded_by = Column(String(100), nullable=True)
     source = Column(String(30), nullable=False, default="manual")
+    payment_method = Column(String(30), nullable=True)
+    reference_number = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship
@@ -134,6 +164,7 @@ class Arrears(Base):
     is_cleared = Column(Boolean, default=False)
     cleared_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     loan = orm_relationship("Loan", back_populates="arrears")
@@ -151,4 +182,20 @@ class MpesaTransaction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship
+    loan = orm_relationship("Loan")
+
+
+class DefaulterFlag(Base):
+    __tablename__ = "defaulter_flags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    loan_id = Column(Integer, ForeignKey("loans.id"), nullable=False)
+    customer_id = Column(String(30), ForeignKey("customers.id_number"), nullable=False)
+    action = Column(String(20), nullable=False)
+    reason = Column(String(255), nullable=True)
+    days_checked = Column(Integer, nullable=True)
+    required_amount = Column(Float, nullable=True)
+    actual_amount = Column(Float, nullable=True)
+    checked_date = Column(DateTime, default=datetime.utcnow)
+
     loan = orm_relationship("Loan")
