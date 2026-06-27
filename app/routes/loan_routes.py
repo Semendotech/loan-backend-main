@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app.database import get_sync_db
 from app.models import Loan, LoanStatus, Arrears
 from app.services.loan_service import LoanService
-from app.auth import get_current_user
+from app.auth import get_current_user_sync
 
 router = APIRouter(prefix="/loans", tags=["loans"])
 
@@ -92,7 +92,7 @@ class LoanListResponse(BaseModel):
 def create_loan(
     loan_data: LoanRequest,
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Create a new loan.
@@ -121,7 +121,7 @@ def get_active_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Get ACTIVE loans (days 1-30 from creation).
@@ -161,7 +161,7 @@ def get_overdue_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Get OVERDUE loans (day 31+ from creation, not cleared).
@@ -191,7 +191,7 @@ def get_cleared_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Get COMPLETED loans (fully paid, remaining_amount = 0).
@@ -220,7 +220,7 @@ def get_cleared_loans(
 def get_loan_detail(
     loan_id: int,
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """Get details of a specific loan"""
     loan = db.query(Loan).filter(Loan.id == loan_id).first()
@@ -238,7 +238,7 @@ def update_loan(
     loan_id: int,
     update_data: dict,
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Update loan details (admin only).
@@ -268,7 +268,7 @@ def update_loan(
 def delete_loan(
     loan_id: int,
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Delete a loan (admin only, only if no payments recorded).
