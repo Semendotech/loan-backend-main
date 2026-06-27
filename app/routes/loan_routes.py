@@ -295,3 +295,4 @@ def delete_loan(
     return {"message": "Loan deleted successfully"}
 
 
+
