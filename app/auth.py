@@ -115,6 +115,18 @@ async def logout(request: Request, response: Response):
 # AUTH DEPENDENCY
 # ==============================
 
+def get_current_user_sync(request: Request, db: Session = Depends(get_sync_db)):
+    """Sync version of get_current_user for sync routes."""
+    session_token = _extract_session_token(request)
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = verify_session_cookie(session_token)
+    user = db.query(User).filter_by(username=username).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
 async def get_current_user(request: Request, db=Depends(get_db)):
     """Return the currently logged-in user from session cookie or bearer token."""
     session_token = _extract_session_token(request)
