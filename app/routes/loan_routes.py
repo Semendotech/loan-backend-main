@@ -134,7 +134,12 @@ def get_active_loans(
     regardless of when due_date was calculated.
     """
     # Sync loans at most once per day
-    pass  # sync disabled
+    import traceback
+    try:
+        pass
+    except Exception as e:
+        print(traceback.format_exc())
+        raise
 
     loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset)
 
