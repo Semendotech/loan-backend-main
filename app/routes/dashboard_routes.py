@@ -382,41 +382,50 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
     """
     target_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
 
+    # Load all active/overdue loans in one query
     loans = db.query(Loan).filter(
         Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
     ).all()
 
-    items = []
+    # Filter to loans whose active window includes target_date
+    eligible = []
     for loan in loans:
         if not loan.start_date:
             continue
         start = loan.start_date.date() if isinstance(loan.start_date, datetime) else loan.start_date
         if target_date < start:
             continue
-        # Only consider days within the 30-day active window
-        last_day = min(target_date, start + timedelta(days=29))
+        last_day = start + timedelta(days=29)
         if target_date > last_day:
             continue
+        eligible.append((loan, start))
 
+    if not eligible:
+        return []
+
+    # Fetch ALL installments for eligible loans in a single query
+    loan_ids = [loan.id for loan, _ in eligible]
+    all_installments = db.query(Installment).filter(
+        Installment.loan_id.in_(loan_ids),
+        func.date(Installment.payment_date) <= target_date,
+    ).all()
+
+    # Group installments by (loan_id, date)
+    from collections import defaultdict
+    sums: dict = defaultdict(lambda: defaultdict(float))
+    for inst in all_installments:
+        d = inst.payment_date.date() if isinstance(inst.payment_date, datetime) else inst.payment_date
+        sums[inst.loan_id][d] += float(inst.amount or 0)
+
+    items = []
+    for loan, start in eligible:
         daily_instalment = loan.daily_instalment
+        sums_by_date = sums[loan.id]
 
-        installments = db.query(Installment).filter(
-            Installment.loan_id == loan.id,
-            func.date(Installment.payment_date) >= start,
-            func.date(Installment.payment_date) <= target_date,
-        ).all()
-
-        sums_by_date = {}
-        for inst in installments:
-            d = inst.payment_date.date() if isinstance(inst.payment_date, datetime) else inst.payment_date
-            sums_by_date[d] = sums_by_date.get(d, 0.0) + float(inst.amount or 0)
-
-        # Was the target date's instalment covered?
         paid_on_target = sums_by_date.get(target_date, 0.0)
         if paid_on_target >= daily_instalment - 0.01:
-            continue  # fully covered, not an uncollected due
+            continue
 
-        # Compute skipped_days: consecutive missed days ending at target_date
         skipped_days = 0
         current = target_date
         while current >= start:
