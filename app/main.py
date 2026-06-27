@@ -123,3 +123,7 @@ async def shutdown_event():
 @app.get("/")
 async def root():
     return {"message": "Server and database are running successfully!"}
+
+@app.get('/health')
+def health():
+    return {'status': 'ok'}
