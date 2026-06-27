@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from app.database import get_sync_db
 from app.models import Loan, LoanStatus, Arrears
@@ -72,6 +72,13 @@ class LoanResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @computed_field
+    @property
+    def days_to_repay(self) -> Optional[int]:
+        if not self.completed_at or not self.start_date:
+            return None
+        return (self.completed_at.date() - self.start_date.date()).days
 
 
 class LoanListResponse(BaseModel):
