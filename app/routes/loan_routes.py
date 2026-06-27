@@ -116,7 +116,7 @@ def create_loan(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/active", response_model=LoanListResponse)
+@router.get("/active")
 def get_active_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
