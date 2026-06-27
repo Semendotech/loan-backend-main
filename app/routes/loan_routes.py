@@ -155,9 +155,16 @@ def get_overdue_loans(
     """
     loans, total = LoanService.get_overdue_loans(db, limit=limit, offset=offset)
 
+    def _to_response(loan):
+        resp = LoanResponse.from_orm(loan)
+        if loan.customer:
+            resp.customer = CustomerBrief.from_orm(loan.customer)
+        return resp
+
     return LoanListResponse(
-        items=[LoanResponse.from_orm(loan) for loan in loans],
+        items=[_to_response(loan) for loan in loans],
         total=total,
+        count=total,
         limit=limit,
         offset=offset,
         has_more=(offset + limit) < total,
@@ -178,9 +185,16 @@ def get_cleared_loans(
     """
     loans, total = LoanService.get_completed_loans(db, limit=limit, offset=offset)
 
+    def _to_response(loan):
+        resp = LoanResponse.from_orm(loan)
+        if loan.customer:
+            resp.customer = CustomerBrief.from_orm(loan.customer)
+        return resp
+
     return LoanListResponse(
-        items=[LoanResponse.from_orm(loan) for loan in loans],
+        items=[_to_response(loan) for loan in loans],
         total=total,
+        count=total,
         limit=limit,
         offset=offset,
         has_more=(offset + limit) < total,
