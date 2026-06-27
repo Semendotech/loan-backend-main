@@ -280,7 +280,7 @@ class LoanService:
         """
         query = db.query(Loan).filter(
             Loan.status == LoanStatus.ACTIVE,
-            (func.julianday('now') - func.julianday(Loan.start_date)) <= 30,
+            (func.datediff(func.now(), Loan.start_date)) <= 30,
         )
 
         total = query.count()
