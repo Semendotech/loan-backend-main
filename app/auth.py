@@ -2,8 +2,9 @@ from fastapi import Request, Response, HTTPException, Depends, status
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from app.utils import verify_password, hash_password
 from app.models import User, UserRole
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, get_sync_db
 from sqlalchemy.future import select
+from sqlalchemy.orm import Session
 from app.schemas import LoginRequest, ChangePasswordRequest
 
 # ==============================
@@ -160,3 +161,4 @@ async def change_password(data: ChangePasswordRequest, current_user: User, db):
     await db.commit()
 
     return {"message": "Password changed successfully"}
+
