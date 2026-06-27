@@ -36,7 +36,7 @@ def _maybe_sync(db):
 
 class LoanRequest(BaseModel):
     amount: float
-    guarantor_id: Optional[str] = None
+    guarantor_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -55,7 +55,7 @@ class CustomerBrief(BaseModel):
 class LoanResponse(BaseModel):
     id: int
     customer_id: str
-    guarantor_id: Optional[str]
+    guarantor_id: Optional[int]
     amount: float
     interest_rate: float
     total_amount: float
