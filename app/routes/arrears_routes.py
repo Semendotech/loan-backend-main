@@ -23,7 +23,7 @@ router = APIRouter(prefix="/arrears", tags=["arrears"])
 class ArrearsResponse(BaseModel):
     id: int
     loan_id: int
-    customer_id: str
+    customer_id: int
     original_amount: float
     remaining_amount: float
     is_cleared: bool
