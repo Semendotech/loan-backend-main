@@ -36,7 +36,7 @@ class PaymentResponse(BaseModel):
     loan_id: int
     amount: float
     payment_date: datetime
-    payment_method: str
+    payment_method: Optional[str]
     reference_number: Optional[str]
     created_at: datetime
 
