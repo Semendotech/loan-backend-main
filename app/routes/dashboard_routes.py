@@ -591,10 +591,6 @@ def get_uncollected_dues_report(
     )
 
 
-
-
-
-
 @router.get("/payments-report")
 def get_payments_report(
     date_str: str,
@@ -766,22 +762,7 @@ def get_payments_report(
         ]))
         story.append(tbl)
 
-        # Total row
-        total_row = Table(
-            [[Paragraph("TOTAL COLLECTED", label_style),
-              Paragraph(f"KES {total_collected:,.2f}",
-                        ParagraphStyle("TV", parent=base["Normal"],
-                                       fontName="Helvetica-Bold", fontSize=10,
-                                       textColor=NAVY, leading=13, alignment=TA_RIGHT))]],
-            colWidths=["50%","50%"],
-        )
-        total_row.setStyle(TableStyle([
-            ("TOPPADDING",    (0,0),(-1,-1), 5),
-            ("BOTTOMPADDING", (0,0),(-1,-1), 0),
-            ("LEFTPADDING",   (0,0),(-1,-1), 8),
-            ("RIGHTPADDING",  (0,0),(-1,-1), 8),
-        ]))
-        story.append(total_row)
+
 
     # Footer
     story.append(Spacer(1, 18))
