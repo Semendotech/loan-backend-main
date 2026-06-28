@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+﻿from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,9 +9,9 @@ import re
 import base64
 import os
 import json
+import hashlib
 from pathlib import Path
 from dotenv import load_dotenv
-
 from app.database import get_db
 from app import models
 
@@ -36,126 +36,110 @@ def _log_payment_recorded(
     amount: float,
     remaining: float,
     status: str,
+    phone: str = "",
+    trans_id: str = "",
 ) -> None:
-    """Classic multi-line payment log block for Render."""
-    logger.info(
-        "Payment Successfully Recorded:\n"
-        f"     Customer: {customer_name}\n"
-        f"            Loan: {loan_id}\n"
-        f"          Amount: {amount}\n"
-        f"       Remaining: {remaining}\n"
-        f"          Status: {status}"
-    )
-
-
-class MpesaCallbackData(BaseModel):
-    """Schema for M-Pesa C2B callback data"""
-    TransID: str
-    TransAmount: float
-    MSISDN: str
-    BillRefNumber: str
-
-
-from ..utils.phone import normalize_phone as util_normalize_phone, hash_phone as util_hash_phone
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    print("", flush=True)
+    print("========== PAYMENT RECEIVED ==========", flush=True)
+    print("Time         : " + now + " UTC", flush=True)
+    print("Customer     : " + customer_name, flush=True)
+    print("Phone        : " + phone, flush=True)
+    print("Amount       : KES " + str(round(amount, 2)), flush=True)
+    print("Ref Number   : " + trans_id, flush=True)
+    print("Loan Balance : KES " + str(round(remaining, 2)), flush=True)
+    print("Status       : " + status, flush=True)
+    print("======================================", flush=True)
+    print("", flush=True)
 
 
 async def send_sms(phone: str, message: str) -> bool:
+    api_key = os.getenv("AFRICAS_TALKING_API_KEY")
+    username = os.getenv("AFRICAS_TALKING_USERNAME")
+
+    if not api_key:
+        logger.error("AFRICAS_TALKING_API_KEY not configured")
+        return False
+
+    if not username:
+        logger.error("AFRICAS_TALKING_USERNAME not configured")
+        return False
+
     try:
-        api_key = os.getenv("AFRICAS_TALKING_API_KEY")
-        username = os.getenv("AFRICAS_TALKING_USERNAME")
-
-        if not api_key:
-            logger.error("AFRICAS_TALKING_API_KEY not configured")
-            return False
-
-        if not username:
-            logger.error("AFRICAS_TALKING_USERNAME not configured")
-            return False
-
-        if not phone.startswith("+"):
-            if phone.startswith("254"):
-                phone = f"+{phone}"
-            elif phone.startswith("0"):
-                phone = f"+254{phone[1:]}"
-            else:
-                phone = f"+254{phone}"
-
-        url = "https://api.africastalking.com/version1/messaging"
-
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "apiKey": api_key
-        }
-
-        payload = {
-            "username": username,
-            "to": phone,
-            "message": message,
-        }
-
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, data=payload)
-
+            response = await client.post(
+                "https://api.africastalking.com/version1/messaging",
+                headers={
+                    "apiKey": api_key,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+                data={
+                    "username": username,
+                    "to": phone,
+                    "message": message,
+                },
+            )
             logger.info(f"SMS API Response Status: {response.status_code}")
             logger.info(f"SMS API Response: {response.text}")
-
             if response.status_code in [200, 201]:
                 logger.info(f"SMS sent successfully to {phone}")
                 return True
             else:
                 logger.error(f"SMS failed to send to {phone}: {response.text}")
                 return False
-
     except Exception as e:
         logger.error(f"Error sending SMS: {str(e)}")
         return False
 
 
-@router.post("/validation")
-async def mpesa_validation(request: Request):
-    try:
-        body = await request.json()
-        logger.debug("Validation request received: %s", body)
-    except Exception as e:
-        logger.warning(f"Validation request error: {str(e)}")
-
-    return {
-        "ResultCode": 0,
-        "ResultDesc": "Validation successful"
-    }
+class MpesaCallbackData(BaseModel):
+    TransactionType: str = ""
+    TransID: str = ""
+    TransTime: str = ""
+    TransAmount: str = ""
+    BusinessShortCode: str = ""
+    BillRefNumber: str = ""
+    InvoiceNumber: str = ""
+    OrgAccountBalance: str = ""
+    ThirdPartyTransID: str = ""
+    MSISDN: str = ""
+    FirstName: str = ""
+    MiddleName: str = ""
+    LastName: str = ""
 
 
 @router.post("/confirmation")
-async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db)):
-    timestamp = datetime.utcnow()
-
+async def mpesa_confirmation(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     try:
-        body = await request.json()
-        logger.debug("M-Pesa callback payload: %s", body)
+        body = await request.body()
+        raw = body.decode("utf-8")
+        logger.debug("Raw callback body: %s", raw)
 
-        trans_id = body.get("TransID")
-        amount = float(body.get("TransAmount") or 0)
-        raw_msisdn = body.get("MSISDN", "")
-        bill_ref = body.get("BillRefNumber") or ""
+        data = json.loads(raw)
 
-        is_hashed_msisdn = bool(re.fullmatch(r"[0-9a-fA-F]{64}", raw_msisdn))
-        if is_hashed_msisdn:
-            normalized_msisdn = None
-            msisdn_hash = raw_msisdn.lower()
-        else:
-            try:
-                normalized_msisdn = util_normalize_phone(raw_msisdn)
-                msisdn_hash = util_hash_phone(normalized_msisdn)
-            except ValueError as exc:
-                logger.error(f"Invalid MSISDN in callback: {raw_msisdn} ({exc})")
-                return {"ResultCode": 0, "ResultDesc": "Invalid phone number"}
+        trans_id = data.get("TransID", "")
+        raw_msisdn = data.get("MSISDN", "")
+        timestamp = data.get("TransTime", "")
+        amount = float(data.get("TransAmount", 0))
 
-        logger.debug(
-            "Parsed callback TransID=%s amount=%s msisdn_hash=%s",
-            trans_id,
-            amount,
-            f"{msisdn_hash[:16]}...",
+        normalized_msisdn = None
+        if raw_msisdn:
+            digits = re.sub(r"\D", "", raw_msisdn)
+            if digits.startswith("0") and len(digits) == 10:
+                normalized_msisdn = "254" + digits[1:]
+            elif digits.startswith("254") and len(digits) == 12:
+                normalized_msisdn = digits
+            elif digits.startswith("7") and len(digits) == 9:
+                normalized_msisdn = "254" + digits
+
+        msisdn_hash = (
+            hashlib.sha256(normalized_msisdn.encode()).hexdigest()
+            if normalized_msisdn
+            else None
         )
 
         if not all([trans_id, msisdn_hash, amount > 0]):
@@ -170,10 +154,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         )
         if existing.scalar_one_or_none():
             logger.info("Duplicate transaction received: %s", trans_id)
-            return {
-                "ResultCode": 0,
-                "ResultDesc": "Already processed"
-            }
+            return {"ResultCode": 0, "ResultDesc": "Already processed"}
 
         result = await db.execute(
             select(models.Customer).where(models.Customer.phone_hash == msisdn_hash)
@@ -193,10 +174,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 f"   MSISDN_Hash: {msisdn_hash}\n"
                 f"   Timestamp: {timestamp}"
             )
-            return {
-                "ResultCode": 0,
-                "ResultDesc": "Payment received - customer not found in system"
-            }
+            return {"ResultCode": 0, "ResultDesc": "Payment received - customer not found in system"}
 
         logger.debug("Customer matched: %s (%s)", customer.name, customer.phone)
 
@@ -219,10 +197,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
                 f"   TransID: {trans_id}\n"
                 f"   Amount: {amount}"
             )
-            return {
-                "ResultCode": 0,
-                "ResultDesc": "Payment received - no matching loan found for customer"
-            }
+            return {"ResultCode": 0, "ResultDesc": "Payment received - no matching loan found for customer"}
 
         logger.debug("Loan matched: id=%s remaining=%s", loan.id, loan.remaining_amount)
 
@@ -257,6 +232,8 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
             amount=amount,
             remaining=loan.remaining_amount,
             status=_loan_status_label(loan),
+            phone=customer.phone or "",
+            trans_id=trans_id,
         )
 
         payment_date = datetime.now().strftime("%d/%m/%Y")
@@ -277,18 +254,12 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         else:
             logger.warning(f"No phone number for customer {customer.name}, skipping SMS")
 
-        return {
-            "ResultCode": 0,
-            "ResultDesc": "Payment confirmed and recorded"
-        }
+        return {"ResultCode": 0, "ResultDesc": "Payment confirmed and recorded"}
 
     except Exception as e:
         await db.rollback()
         logger.error(f"Error processing payment: {str(e)}")
-        return {
-            "ResultCode": 0,
-            "ResultDesc": "Payment received - processing error"
-        }
+        return {"ResultCode": 0, "ResultDesc": "Payment received - processing error"}
 
 
 @router.post("/register-urls")
@@ -328,7 +299,6 @@ async def register_urls():
                 "ValidationURL": validation_url
             }
         )
-
         result = register_response.json()
         logger.info(f"URL Registration response: {result}")
         return result
@@ -369,7 +339,6 @@ async def simulate_payment():
                 "BillRefNumber": "0"
             }
         )
-
         result = simulate_response.json()
         logger.info(f"Simulate response: {result}")
         return result
