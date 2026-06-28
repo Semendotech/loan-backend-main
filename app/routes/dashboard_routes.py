@@ -1,4 +1,4 @@
-﻿"""
+"""
 CORRECTED Dashboard Routes
 - Metrics based on CORRECT definitions of ACTIVE, OVERDUE, DEFAULTERS
 - ACTIVE = Days 1-30 from creation
@@ -925,17 +925,18 @@ def get_cleared_loans_report(
     if not loans:
         story.append(Paragraph("No cleared loans found for this period.", base["Normal"]))
     else:
-        rows = [["#", "CUSTOMER", "ID NUMBER", "PHONE", "LOAN AMOUNT (KES)", "TOTAL PAID (KES)", "CLEARED DATE"]]
+        rows = [["#", "CUSTOMER", "ID NUMBER", "PHONE", "DATE CREATED", "TOTAL PAID (KES)", "CLEARED DATE"]]
         for idx, loan in enumerate(loans, 1):
             customer = loan.customer
             cleared_date = loan.completed_at.strftime("%d %b %Y") if loan.completed_at else "-"
+            date_created = loan.start_date.strftime("%d %b %Y") if loan.start_date else "-"
             total_paid = float(loan.total_amount or 0) - float(loan.remaining_amount or 0)
             rows.append([
                 str(idx),
                 customer.name      if customer else "-",
                 customer.id_number if customer else "-",
                 customer.phone     if customer else "-",
-                f"{float(loan.total_amount or 0):,.2f}",
+                date_created,
                 f"{total_paid:,.2f}",
                 cleared_date,
             ])
@@ -979,3 +980,4 @@ def get_cleared_loans_report(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=cleared_loans_report_{suffix}.pdf"},
     )
+
