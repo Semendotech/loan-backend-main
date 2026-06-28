@@ -105,7 +105,7 @@ class LoanListResponse(BaseModel):
 
 # ============ ENDPOINTS ============
 
-@router.post("/create")
+@router.post("")
 def create_loan(
     loan_data: LoanRequest,
     db: Session = Depends(get_sync_db),
@@ -120,15 +120,45 @@ def create_loan(
     - total_amount = amount * 1.20 (20% interest)
     - daily_instalment = total_amount / 30
     """
+    from datetime import datetime as _dt
+    from app.models import Guarantor, Customer
     try:
+        customer = db.query(Customer).filter(Customer.id_number == loan_data.id_number).first()
+        if not customer:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        guarantor_id = None
+        if loan_data.guarantor:
+            g = loan_data.guarantor
+            guarantor = Guarantor(
+                name=g.name,
+                id_number=g.id_number,
+                phone=g.phone,
+                location=g.location,
+                relationship=g.relationship,
+            )
+            db.add(guarantor)
+            db.flush()
+            guarantor_id = guarantor.id
+
+        start_date = None
+        if loan_data.start_date:
+            try:
+                start_date = _dt.strptime(loan_data.start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD.")
+
         loan = LoanService.create_loan(
             db=db,
-            customer_id=current_user["id_number"],
+            customer_id=customer.id,
             amount=loan_data.amount,
-            guarantor_id=loan_data.guarantor_id,
+            guarantor_id=guarantor_id,
             interest_rate=20.0,
+            start_date=start_date,
         )
         return LoanResponse.from_orm(loan)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -343,6 +373,8 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
+
 
 
 
