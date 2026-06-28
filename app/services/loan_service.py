@@ -20,7 +20,7 @@ class LoanService:
     @staticmethod
     def create_loan(
         db: Session,
-        customer_id: int,
+        customer_id: str,
         amount: float,
         guarantor_id: int = None,
         interest_rate: float = 20.0,
@@ -520,6 +520,7 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
         await db.commit()
 
     return status_changed
+
 
 
 

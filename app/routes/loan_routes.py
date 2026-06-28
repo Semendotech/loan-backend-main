@@ -159,7 +159,7 @@ def create_loan(
 
         loan = LoanService.create_loan(
             db=db,
-            customer_id=customer.id,
+            customer_id=customer.id_number,
             amount=loan_data.amount,
             guarantor_id=guarantor_id,
             interest_rate=20.0,
@@ -382,6 +382,7 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
 
 
 
