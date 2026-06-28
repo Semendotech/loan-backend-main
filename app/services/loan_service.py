@@ -1,7 +1,7 @@
-"""
+﻿"""
 CORRECTED Loan Service - Core Business Logic
 - Proper defaulter detection (5 consecutive days < required amount)
-- Status sync (ACTIVE → OVERDUE on day 31)
+- Status sync (ACTIVE â†’ OVERDUE on day 31)
 - Arrears creation and syncing
 - Daily operations
 """
@@ -61,9 +61,9 @@ class LoanService:
         Sync loan status based on days elapsed and remaining balance.
         
         Logic:
-        - If remaining_amount <= 0 → COMPLETED
-        - If days_since_start >= 31 → OVERDUE (create Arrears if not exists)
-        - Otherwise → ACTIVE
+        - If remaining_amount <= 0 â†’ COMPLETED
+        - If days_since_start >= 31 â†’ OVERDUE (create Arrears if not exists)
+        - Otherwise â†’ ACTIVE
         
         Returns True if status changed, False otherwise.
         """
@@ -285,8 +285,8 @@ class LoanService:
         """
         from sqlalchemy.orm import selectinload
         query = db.query(Loan).options(selectinload(Loan.customer)).filter(
-            Loan.status == LoanStatus.ACTIVE,
-            (func.datediff(func.now(), Loan.start_date)) <= 30,
+            Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
+            Loan.remaining_amount > 0,
         )
 
         total = query.count()
@@ -487,3 +487,4 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
         await db.commit()
 
     return status_changed
+
