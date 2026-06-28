@@ -127,6 +127,15 @@ def create_loan(
         if not customer:
             raise HTTPException(status_code=404, detail="Customer not found")
 
+        # Block if customer has any loan with remaining balance > 0
+        from app.models import Loan as LoanModel
+        open_loan = db.query(LoanModel).filter(
+            LoanModel.customer_id == customer.id,
+            LoanModel.remaining_amount > 0,
+        ).first()
+        if open_loan:
+            raise HTTPException(status_code=400, detail="Customer has an outstanding loan balance. Clear it before issuing a new loan.")
+
         guarantor_id = None
         if loan_data.guarantor:
             g = loan_data.guarantor
@@ -373,6 +382,7 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
 
 
 
