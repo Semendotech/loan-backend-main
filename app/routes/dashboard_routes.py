@@ -729,7 +729,8 @@ def get_payments_report(
             customer = loan.customer if loan else None
             time_str = inst.payment_date.strftime("%H:%M") if inst.payment_date else "-"
             recorded_by = (inst.recorded_by or "").strip() or "System"
-            balance  = f"{float(inst.balance_after):,.2f}" if hasattr(inst, 'balance_after') and inst.balance_after is not None else (f"{float(loan.remaining_amount):,.2f}" if loan else "-")
+            _bal = inst.balance_after if (hasattr(inst, 'balance_after') and inst.balance_after is not None) else (loan.remaining_amount if loan else None)
+            balance = f"{float(_bal):,.2f}" if _bal is not None else "-"
             rows.append([
                 str(idx),
                 customer.name if customer else "-",
