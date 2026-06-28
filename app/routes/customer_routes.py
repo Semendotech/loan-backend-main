@@ -694,83 +694,287 @@ async def get_customer_statement_pdf(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Printable PDF version of the customer statement."""
+    """Printable, premium bank-statement-style PDF of the customer statement."""
     from io import BytesIO
+    from datetime import datetime as _dt
     from fastapi.responses import StreamingResponse
     from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
     from reportlab.lib.units import mm
+    from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 
     data = await get_customer_statement(customer_id=customer_id, db=db, current_user=current_user)
 
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=18 * mm, bottomMargin=18 * mm)
-    styles = getSampleStyleSheet()
-    story = []
+    NAVY     = colors.HexColor("#0f2942")
+    SLATE    = colors.HexColor("#475569")
+    LIGHT_BG = colors.HexColor("#f8fafc")
+    BORDER   = colors.HexColor("#cbd5e1")
+    ACCENT   = colors.HexColor("#0f2942")
+    GOLD     = colors.HexColor("#c9a84c")
 
-    cust = data["customer"]
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+    )
+
+    base_styles = getSampleStyleSheet()
+
+    institution_style = ParagraphStyle(
+        "Institution", parent=base_styles["Normal"],
+        fontName="Helvetica-Bold", fontSize=17, textColor=NAVY, leading=20,
+    )
+    tagline_style = ParagraphStyle(
+        "Tagline", parent=base_styles["Normal"],
+        fontName="Helvetica-Oblique", fontSize=8, textColor=GOLD, leading=10,
+    )
+    doc_title_style = ParagraphStyle(
+        "DocTitle", parent=base_styles["Normal"],
+        fontName="Helvetica-Bold", fontSize=9, textColor=NAVY, leading=11,
+        alignment=TA_RIGHT,
+    )
+    doc_sub_style = ParagraphStyle(
+        "DocSub", parent=base_styles["Normal"],
+        fontName="Helvetica", fontSize=8, textColor=SLATE, leading=10,
+        alignment=TA_RIGHT,
+    )
+    label_style = ParagraphStyle(
+        "Label", parent=base_styles["Normal"],
+        fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10,
+    )
+    value_style = ParagraphStyle(
+        "Value", parent=base_styles["Normal"],
+        fontName="Helvetica-Bold", fontSize=10, textColor=NAVY, leading=13,
+    )
+    summary_label_style = ParagraphStyle(
+        "SummaryLabel", parent=base_styles["Normal"],
+        fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10, alignment=TA_CENTER,
+    )
+    summary_value_style = ParagraphStyle(
+        "SummaryValue", parent=base_styles["Normal"],
+        fontName="Helvetica-Bold", fontSize=13, textColor=NAVY, leading=16, alignment=TA_CENTER,
+    )
+    loan_header_style = ParagraphStyle(
+        "LoanHeader", parent=base_styles["Normal"],
+        fontName="Helvetica-Bold", fontSize=11, textColor=colors.white, leading=14,
+    )
+    loan_meta_style = ParagraphStyle(
+        "LoanMeta", parent=base_styles["Normal"],
+        fontName="Helvetica", fontSize=8, textColor=colors.HexColor("#c8d8e8"), leading=11,
+    )
+    footer_style = ParagraphStyle(
+        "Footer", parent=base_styles["Normal"],
+        fontName="Helvetica-Oblique", fontSize=7, textColor=SLATE, leading=10, alignment=TA_CENTER,
+    )
+
+    story = []
+    cust    = data["customer"]
     summary = data["summary"]
 
-    story.append(Paragraph("Loan Account Statement", styles["Title"]))
-    story.append(Spacer(1, 6))
-    story.append(Paragraph(f"Customer: {cust['name']}", styles["Normal"]))
-    story.append(Paragraph(f"ID Number: {cust['id_number']}", styles["Normal"]))
-    story.append(Paragraph(f"Phone: {cust['phone']}", styles["Normal"]))
-    story.append(Paragraph(f"Location: {cust.get('location') or '-'}", styles["Normal"]))
-    story.append(Paragraph(f"Customer Since: {cust['registered_at']}", styles["Normal"]))
+    # ---- Letterhead ----
+    header_left = Table(
+        [[Paragraph("SEMEDO LOAN SYSTEM", institution_style)],
+         [Paragraph("Trusted Financial Solutions", tagline_style)]],
+        colWidths=[None],
+    )
+    header_left.setStyle(TableStyle([
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("TOPPADDING",    (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+
+    header_right = Table(
+        [[Paragraph("LOAN ACCOUNT STATEMENT", doc_title_style)],
+         [Paragraph(f"Generated: {_dt.utcnow().strftime('%d %b %Y, %H:%M')} UTC", doc_sub_style)]],
+        colWidths=[None],
+    )
+    header_right.setStyle(TableStyle([
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("TOPPADDING",    (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+
+    header_table = Table([[header_left, header_right]], colWidths=["60%", "40%"])
+    header_table.setStyle(TableStyle([
+        ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=2.5, color=NAVY, spaceAfter=2))
+    story.append(HRFlowable(width="100%", thickness=1,   color=GOLD, spaceAfter=10))
+
+    # ---- Customer info panel ----
+    info_rows = [
+        [Paragraph("ACCOUNT HOLDER",  label_style),
+         Paragraph("ID NUMBER",       label_style),
+         Paragraph("PHONE",           label_style),
+         Paragraph("CUSTOMER SINCE",  label_style)],
+        [Paragraph(cust["name"].strip(),                          value_style),
+         Paragraph(cust["id_number"],                             value_style),
+         Paragraph(cust["phone"],                                  value_style),
+         Paragraph(str(cust["registered_at"]).split(" ")[0],      value_style)],
+    ]
+    info_table = Table(info_rows, colWidths=["30%", "22%", "22%", "26%"])
+    info_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), LIGHT_BG),
+        ("BOX",           (0, 0), (-1, -1), 0.75, BORDER),
+        ("LINEAFTER",     (0, 0), (2, -1),  0.5,  BORDER),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+        ("TOPPADDING",    (0, 0), (-1, 0),  8),
+        ("BOTTOMPADDING", (0, 0), (-1, 0),  2),
+        ("TOPPADDING",    (0, 1), (-1, 1),  2),
+        ("BOTTOMPADDING", (0, 1), (-1, 1),  8),
+    ]))
+    story.append(info_table)
     story.append(Spacer(1, 10))
 
-    story.append(Paragraph(
-        f"Total Loans: {summary['total_loans']} | "
-        f"Lifetime Borrowed: KES {summary['lifetime_borrowed']:,.2f} | "
-        f"Lifetime Paid: KES {summary['lifetime_paid']:,.2f}",
-        styles["Normal"],
-    ))
-    story.append(Spacer(1, 14))
+    # ---- Summary strip ----
+    summary_rows = [
+        [Paragraph("TOTAL LOANS",        summary_label_style),
+         Paragraph("LIFETIME BORROWED",  summary_label_style),
+         Paragraph("LIFETIME PAID",      summary_label_style)],
+        [Paragraph(str(summary["total_loans"]),                       summary_value_style),
+         Paragraph(f"KES {summary['lifetime_borrowed']:,.2f}",        summary_value_style),
+         Paragraph(f"KES {summary['lifetime_paid']:,.2f}",            summary_value_style)],
+    ]
+    summary_table = Table(summary_rows, colWidths=["20%", "40%", "40%"])
+    summary_table.setStyle(TableStyle([
+        ("BOX",           (0, 0), (-1, -1), 0.75, BORDER),
+        ("LINEAFTER",     (0, 0), (1, -1),  0.5,  BORDER),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(summary_table)
+    story.append(Spacer(1, 16))
 
-    for loan in data["loans"]:
-        story.append(Paragraph(
-            f"Loan #{loan['loan_id']} — Opened {loan['start_date']} — Status: {loan['status']}",
-            styles["Heading3"],
-        ))
-        story.append(Paragraph(
-            f"Principal: KES {loan['amount']:,.2f} | Interest: {loan['interest_rate']}% | "
-            f"Total Due: KES {loan['total_amount']:,.2f} | Remaining: KES {loan['remaining_amount']:,.2f}",
-            styles["Normal"],
-        ))
-        story.append(Spacer(1, 6))
+    # ---- Per-loan ledgers ----
+    for idx, loan in enumerate(data["loans"]):
+        if idx > 0:
+            story.append(Spacer(1, 14))
 
-        table_data = [["Date", "Time", "Amount Paid", "Balance After"]]
+        if loan["status"] == "CLEARED":
+            status_color = colors.HexColor("#16a34a")
+        elif loan["status"] == "OVERDUE":
+            status_color = colors.HexColor("#f59e0b")
+        else:
+            status_color = colors.white
+
+        status_style = ParagraphStyle(
+            f"Status_{idx}", parent=base_styles["Normal"],
+            fontName="Helvetica-Bold", fontSize=9,
+            textColor=status_color, leading=11, alignment=TA_RIGHT,
+        )
+        closing_val_style = ParagraphStyle(
+            f"ClosingVal_{idx}", parent=base_styles["Normal"],
+            fontName="Helvetica-Bold", fontSize=10, textColor=NAVY,
+            leading=13, alignment=TA_RIGHT,
+        )
+
+        header_cell = Table(
+            [[Paragraph(f"LOAN #{loan['loan_id']}", loan_header_style),
+              Paragraph(loan["status"], status_style)],
+             [Paragraph(
+                  f"Opened {loan['start_date']}  &middot;  Due {loan['due_date']}",
+                  loan_meta_style),
+              Paragraph(
+                  f"Principal KES {loan['amount']:,.2f}  &middot;  "
+                  f"Interest {loan['interest_rate']:.0f}%  &middot;  "
+                  f"Total Due KES {loan['total_amount']:,.2f}",
+                  loan_meta_style)]],
+            colWidths=["30%", "70%"],
+        )
+        header_cell.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), ACCENT),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+            ("TOPPADDING",    (0, 0), (-1, 0),  8),
+            ("BOTTOMPADDING", (0, 0), (-1, 0),  2),
+            ("TOPPADDING",    (0, 1), (-1, 1),  2),
+            ("BOTTOMPADDING", (0, 1), (-1, 1),  8),
+            ("ALIGN",         (1, 0), (1, 0),   "RIGHT"),
+            ("ALIGN",         (1, 1), (1, 1),   "RIGHT"),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(header_cell)
+
+        table_data = [["DATE", "TIME", "METHOD", "AMOUNT PAID", "BALANCE AFTER"]]
         if loan["installments"]:
             for inst in loan["installments"]:
                 pay_dt = str(inst["payment_date"])
                 date_part, _, time_part = pay_dt.partition(" ")
                 table_data.append([
                     date_part,
-                    time_part or "-",
-                    f"KES {inst['amount']:,.2f}",
-                    f"KES {inst['balance_after']:,.2f}",
+                    time_part[:8] if time_part else "-",
+                    inst.get("payment_method") or "-",
+                    f"{inst['amount']:,.2f}",
+                    f"{inst['balance_after']:,.2f}",
                 ])
         else:
-            table_data.append(["-", "-", "No payments recorded", "-"])
+            table_data.append(["-", "-", "-", "No payments recorded", "-"])
 
-        tbl = Table(table_data, repeatRows=1, hAlign="LEFT")
+        tbl = Table(
+            table_data, repeatRows=1,
+            colWidths=[25 * mm, 20 * mm, 26 * mm, 32 * mm, 32 * mm],
+        )
         tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+            ("FONTNAME",      (0, 0), (-1,  0), "Helvetica-Bold"),
+            ("FONTNAME",      (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("TEXTCOLOR",     (0, 0), (-1,  0), SLATE),
+            ("BACKGROUND",    (0, 0), (-1,  0), LIGHT_BG),
+            ("ALIGN",         (3, 0), (4, -1),  "RIGHT"),
+            ("ALIGN",         (0, 0), (2, -1),  "LEFT"),
+            ("LINEBELOW",     (0, 0), (-1,  0), 0.75, BORDER),
+            ("LINEBELOW",     (0, 1), (-1, -2), 0.35, BORDER),
+            ("BOX",           (0, 0), (-1, -1), 0.75, BORDER),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, LIGHT_BG]),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
         ]))
         story.append(tbl)
-        story.append(Spacer(1, 16))
+
+        closing_balance = loan["remaining_amount"]
+        closing_row = Table(
+            [[Paragraph("CLOSING BALANCE", label_style),
+              Paragraph(f"KES {closing_balance:,.2f}", closing_val_style)]],
+            colWidths=["50%", "50%"],
+        )
+        closing_row.setStyle(TableStyle([
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+        ]))
+        story.append(closing_row)
+
+    # ---- Footer ----
+    story.append(Spacer(1, 18))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
+    story.append(Paragraph(
+        f"This statement was generated electronically on "
+        f"{_dt.utcnow().strftime('%d %B %Y at %H:%M UTC')} "
+        f"and is valid without a signature. For queries contact Semedo Loan System.",
+        footer_style,
+    ))
 
     doc.build(story)
     buffer.seek(0)
-
-    safe_name = "".join(c for c in cust["name"] if c.isalnum() or c in " -").strip().replace(" ", "_")
+    safe_name = "".join(c if c.isalnum() else "_" for c in cust["name"])
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
