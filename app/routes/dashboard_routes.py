@@ -1,4 +1,4 @@
-"""
+﻿"""
 CORRECTED Dashboard Routes
 - Metrics based on CORRECT definitions of ACTIVE, OVERDUE, DEFAULTERS
 - ACTIVE = Days 1-30 from creation
@@ -589,3 +589,205 @@ def get_uncollected_dues_report(
             "Content-Disposition": f"attachment; filename=uncollected_dues_report_{end_date}.pdf"
         },
     )
+
+
+@router.get("/payments-report")
+def get_payments_report(
+    date_str: str,
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    PDF report of all payments received on a given date.
+    date_str: YYYY-MM-DD
+    """
+    from io import BytesIO
+    from datetime import datetime as _dt
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+    from sqlalchemy.orm import selectinload
+
+    try:
+        target_date = _dt.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    day_start = _dt.combine(target_date, _dt.min.time())
+    day_end   = _dt.combine(target_date, _dt.max.time())
+
+    installments = (
+        db.query(Installment)
+        .options(
+            selectinload(Installment.loan).selectinload(Loan.customer)
+        )
+        .filter(
+            Installment.payment_date >= day_start,
+            Installment.payment_date <= day_end,
+        )
+        .order_by(Installment.payment_date)
+        .all()
+    )
+
+    total_collected = sum(float(i.amount or 0) for i in installments)
+
+    # ---- PDF ----
+    NAVY     = colors.HexColor("#0f2942")
+    SLATE    = colors.HexColor("#475569")
+    LIGHT_BG = colors.HexColor("#f8fafc")
+    BORDER   = colors.HexColor("#cbd5e1")
+    GOLD     = colors.HexColor("#c9a84c")
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=letter,
+        topMargin=14*mm, bottomMargin=14*mm,
+        leftMargin=18*mm, rightMargin=18*mm,
+    )
+    base = getSampleStyleSheet()
+
+    inst_style   = ParagraphStyle("Inst",   parent=base["Normal"], fontName="Helvetica-Bold", fontSize=17, textColor=NAVY, leading=20)
+    tag_style    = ParagraphStyle("Tag",    parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=8, textColor=GOLD, leading=10)
+    rt_style     = ParagraphStyle("RT",     parent=base["Normal"], fontName="Helvetica-Bold", fontSize=9, textColor=NAVY, leading=11, alignment=TA_RIGHT)
+    rs_style     = ParagraphStyle("RS",     parent=base["Normal"], fontName="Helvetica", fontSize=8, textColor=SLATE, leading=10, alignment=TA_RIGHT)
+    label_style  = ParagraphStyle("Lbl",    parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10)
+    val_style    = ParagraphStyle("Val",    parent=base["Normal"], fontName="Helvetica-Bold", fontSize=10, textColor=NAVY, leading=13)
+    sl_style     = ParagraphStyle("SL",     parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10, alignment=TA_CENTER)
+    sv_style     = ParagraphStyle("SV",     parent=base["Normal"], fontName="Helvetica-Bold", fontSize=13, textColor=NAVY, leading=16, alignment=TA_CENTER)
+    footer_style = ParagraphStyle("Ftr",    parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=7, textColor=SLATE, leading=10, alignment=TA_CENTER)
+
+    story = []
+
+    # Letterhead
+    left_tbl = Table(
+        [[Paragraph("KODONGO SAVINGS & CREDIT", inst_style)],
+         [Paragraph("Trusted Financial Solutions", tag_style)]],
+        colWidths=[None],
+    )
+    left_tbl.setStyle(TableStyle([
+        ("LEFTPADDING",   (0,0),(-1,-1), 0),
+        ("RIGHTPADDING",  (0,0),(-1,-1), 0),
+        ("TOPPADDING",    (0,0),(-1,-1), 0),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 2),
+    ]))
+    right_tbl = Table(
+        [[Paragraph("PAYMENTS REPORT", rt_style)],
+         [Paragraph(f"Date: {target_date.strftime('%d %b %Y')}", rs_style)],
+         [Paragraph(f"Generated: {_dt.utcnow().strftime('%d %b %Y, %H:%M')} UTC", rs_style)]],
+        colWidths=[None],
+    )
+    right_tbl.setStyle(TableStyle([
+        ("LEFTPADDING",   (0,0),(-1,-1), 0),
+        ("RIGHTPADDING",  (0,0),(-1,-1), 0),
+        ("TOPPADDING",    (0,0),(-1,-1), 0),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 2),
+    ]))
+    hdr = Table([[left_tbl, right_tbl]], colWidths=["60%","40%"])
+    hdr.setStyle(TableStyle([
+        ("VALIGN",       (0,0),(-1,-1), "TOP"),
+        ("LEFTPADDING",  (0,0),(-1,-1), 0),
+        ("RIGHTPADDING", (0,0),(-1,-1), 0),
+    ]))
+    story.append(hdr)
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=2.5, color=NAVY, spaceAfter=2))
+    story.append(HRFlowable(width="100%", thickness=1,   color=GOLD, spaceAfter=10))
+
+    # Summary strip
+    summary_rows = [
+        [Paragraph("TOTAL PAYMENTS", sl_style),
+         Paragraph("TOTAL COLLECTED", sl_style)],
+        [Paragraph(str(len(installments)), sv_style),
+         Paragraph(f"KES {total_collected:,.2f}", sv_style)],
+    ]
+    sum_tbl = Table(summary_rows, colWidths=["30%","70%"])
+    sum_tbl.setStyle(TableStyle([
+        ("BOX",           (0,0),(-1,-1), 0.75, BORDER),
+        ("LINEAFTER",     (0,0),(0,-1),  0.5,  BORDER),
+        ("TOPPADDING",    (0,0),(-1,-1), 6),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 6),
+    ]))
+    story.append(sum_tbl)
+    story.append(Spacer(1, 14))
+
+    # Payments table
+    if not installments:
+        story.append(Paragraph("No payments recorded for this date.", base["Normal"]))
+    else:
+        rows = [["TIME", "CUSTOMER", "LOAN #", "METHOD", "AMOUNT (KES)"]]
+        for inst in installments:
+            loan     = inst.loan
+            customer = loan.customer if loan else None
+            time_str = inst.payment_date.strftime("%H:%M:%S") if inst.payment_date else "-"
+            method   = (inst.payment_method or "").strip() or "System"
+            rows.append([
+                time_str,
+                customer.name if customer else "-",
+                str(loan.id) if loan else "-",
+                method,
+                f"{float(inst.amount):,.2f}",
+            ])
+
+        tbl = Table(rows, repeatRows=1,
+                    colWidths=[20*mm, 55*mm, 18*mm, 30*mm, 35*mm])
+        tbl.setStyle(TableStyle([
+            ("FONTNAME",       (0,0),(-1, 0), "Helvetica-Bold"),
+            ("FONTNAME",       (0,1),(-1,-1), "Helvetica"),
+            ("FONTSIZE",       (0,0),(-1,-1), 8.5),
+            ("TEXTCOLOR",      (0,0),(-1, 0), SLATE),
+            ("BACKGROUND",     (0,0),(-1, 0), LIGHT_BG),
+            ("ALIGN",          (4,0),(4,-1),  "RIGHT"),
+            ("ALIGN",          (0,0),(3,-1),  "LEFT"),
+            ("LINEBELOW",      (0,0),(-1, 0), 0.75, BORDER),
+            ("LINEBELOW",      (0,1),(-1,-2), 0.35, BORDER),
+            ("BOX",            (0,0),(-1,-1), 0.75, BORDER),
+            ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, LIGHT_BG]),
+            ("TOPPADDING",     (0,0),(-1,-1), 5),
+            ("BOTTOMPADDING",  (0,0),(-1,-1), 5),
+            ("LEFTPADDING",    (0,0),(-1,-1), 8),
+            ("RIGHTPADDING",   (0,0),(-1,-1), 8),
+        ]))
+        story.append(tbl)
+
+        # Total row
+        total_row = Table(
+            [[Paragraph("TOTAL COLLECTED", label_style),
+              Paragraph(f"KES {total_collected:,.2f}",
+                        ParagraphStyle("TV", parent=base["Normal"],
+                                       fontName="Helvetica-Bold", fontSize=10,
+                                       textColor=NAVY, leading=13, alignment=TA_RIGHT))]],
+            colWidths=["50%","50%"],
+        )
+        total_row.setStyle(TableStyle([
+            ("TOPPADDING",    (0,0),(-1,-1), 5),
+            ("BOTTOMPADDING", (0,0),(-1,-1), 0),
+            ("LEFTPADDING",   (0,0),(-1,-1), 8),
+            ("RIGHTPADDING",  (0,0),(-1,-1), 8),
+        ]))
+        story.append(total_row)
+
+    # Footer
+    story.append(Spacer(1, 18))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
+    story.append(Paragraph(
+        f"Generated on {_dt.utcnow().strftime('%d %B %Y at %H:%M UTC')}. "
+        f"This report is for internal use only. Kodongo Savings & Credit.",
+        footer_style,
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=payments_report_{date_str}.pdf"},
+    )
+
+
