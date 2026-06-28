@@ -147,6 +147,7 @@ async def mpesa_confirmation(
         raw_msisdn = data.get("MSISDN", "")
         timestamp = data.get("TransTime", "")
         amount = float(data.get("TransAmount", 0))
+        print(">>> PARSED: trans_id=" + trans_id + " msisdn=" + raw_msisdn + " amount=" + str(amount), flush=True)
 
         normalized_msisdn = None
         if raw_msisdn:
