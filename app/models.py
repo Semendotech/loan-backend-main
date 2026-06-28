@@ -179,7 +179,7 @@ class MpesaTransaction(Base):
     trans_id = Column(String(100), unique=True, nullable=False)  # Safaricom transaction ID
     amount = Column(Float, nullable=False)
     phone = Column(String(20), nullable=False)  # Customer phone number
-    loan_id = Column(Integer, ForeignKey("loans.id"), nullable=False)
+    loan_id = Column(Integer, ForeignKey("loans.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship

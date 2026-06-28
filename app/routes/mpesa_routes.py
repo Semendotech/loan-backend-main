@@ -53,6 +53,25 @@ def _log_payment_recorded(
     print("", flush=True)
 
 
+def _log_unmatched_payment(
+    *,
+    trans_id: str,
+    amount: float,
+    phone: str,
+    reason: str,
+) -> None:
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    print("", flush=True)
+    print("========== UNMATCHED PAYMENT ==========", flush=True)
+    print("Time       : " + now + " UTC", flush=True)
+    print("TransID    : " + trans_id, flush=True)
+    print("Phone      : " + phone, flush=True)
+    print("Amount     : KES " + str(round(amount, 2)), flush=True)
+    print("Reason     : " + reason, flush=True)
+    print("=======================================", flush=True)
+    print("", flush=True)
+
+
 async def send_sms(phone: str, message: str) -> bool:
     api_key = os.getenv("AFRICAS_TALKING_API_KEY")
     username = os.getenv("AFRICAS_TALKING_USERNAME")
@@ -161,19 +180,21 @@ async def mpesa_confirmation(
         )
         customer = result.scalar_one_or_none()
 
-        if customer:
-            logger.debug("Phone hash matched customer: %s", customer.name)
-        else:
-            logger.debug("No customer for phone hash %s...", msisdn_hash[:16])
-
         if not customer:
-            logger.warning(
-                f"UNMATCHED PAYMENT - No customer found for phone hash:\n"
-                f"   TransID: {trans_id}\n"
-                f"   Amount: {amount}\n"
-                f"   MSISDN_Hash: {msisdn_hash}\n"
-                f"   Timestamp: {timestamp}"
+            _log_unmatched_payment(
+                trans_id=trans_id,
+                amount=amount,
+                phone=normalized_msisdn or raw_msisdn,
+                reason="No customer found for phone number",
             )
+            unmatched_tx = models.MpesaTransaction(
+                trans_id=trans_id,
+                amount=amount,
+                phone=normalized_msisdn or raw_msisdn,
+                loan_id=None,
+            )
+            db.add(unmatched_tx)
+            await db.commit()
             return {"ResultCode": 0, "ResultDesc": "Payment received - customer not found in system"}
 
         logger.debug("Customer matched: %s (%s)", customer.name, customer.phone)
@@ -191,12 +212,20 @@ async def mpesa_confirmation(
         loan = result.scalar_one_or_none()
 
         if not loan:
-            logger.warning(
-                f"No matching loan found for customer:\n"
-                f"   Customer: {customer.name}\n"
-                f"   TransID: {trans_id}\n"
-                f"   Amount: {amount}"
+            _log_unmatched_payment(
+                trans_id=trans_id,
+                amount=amount,
+                phone=customer.phone or normalized_msisdn or raw_msisdn,
+                reason=f"Customer found ({customer.name}) but has no active loan",
             )
+            unmatched_tx = models.MpesaTransaction(
+                trans_id=trans_id,
+                amount=amount,
+                phone=customer.phone or normalized_msisdn or raw_msisdn,
+                loan_id=None,
+            )
+            db.add(unmatched_tx)
+            await db.commit()
             return {"ResultCode": 0, "ResultDesc": "Payment received - no matching loan found for customer"}
 
         logger.debug("Loan matched: id=%s remaining=%s", loan.id, loan.remaining_amount)
@@ -220,7 +249,7 @@ async def mpesa_confirmation(
             trans_id=trans_id,
             amount=amount,
             phone=customer.phone,
-            loan_id=loan.id
+            loan_id=loan.id,
         )
         db.add(mpesa_tx)
 
@@ -260,6 +289,27 @@ async def mpesa_confirmation(
         await db.rollback()
         logger.error(f"Error processing payment: {str(e)}")
         return {"ResultCode": 0, "ResultDesc": "Payment received - processing error"}
+
+
+@router.get("/unmatched-payments")
+async def get_unmatched_payments(db: AsyncSession = Depends(get_db)):
+    """Return all MpesaTransactions where loan_id is NULL (unmatched payments)."""
+    result = await db.execute(
+        select(models.MpesaTransaction)
+        .where(models.MpesaTransaction.loan_id == None)
+        .order_by(models.MpesaTransaction.created_at.desc())
+    )
+    transactions = result.scalars().all()
+    return [
+        {
+            "id": tx.id,
+            "trans_id": tx.trans_id,
+            "amount": tx.amount,
+            "phone": tx.phone,
+            "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        }
+        for tx in transactions
+    ]
 
 
 @router.post("/register-urls")
