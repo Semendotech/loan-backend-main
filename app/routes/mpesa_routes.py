@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from app.database import get_db
 from app import models
+from app.utils import now_eat_str
 
 # Load .env located at project root
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -39,7 +40,7 @@ def _log_payment_recorded(
     phone: str = "",
     trans_id: str = "",
 ) -> None:
-    now = datetime.utcnow().isoformat(timespec="seconds")
+    now = now_eat_str()
     print("", flush=True)
     print("========== PAYMENT RECEIVED ==========", flush=True)
     print("Time         : " + now + " UTC", flush=True)
@@ -60,7 +61,7 @@ def _log_unmatched_payment(
     phone: str,
     reason: str,
 ) -> None:
-    now = datetime.utcnow().isoformat(timespec="seconds")
+    now = now_eat_str()
     print("", flush=True)
     print("========== UNMATCHED PAYMENT ==========", flush=True)
     print("Time       : " + now + " UTC", flush=True)
@@ -267,8 +268,8 @@ async def mpesa_confirmation(
             trans_id=trans_id,
         )
 
-        payment_date = datetime.now().strftime("%d/%m/%Y")
-        payment_time = datetime.now().strftime("%H:%M")
+        payment_date = now_eat_str("%d/%m/%Y")
+        payment_time = now_eat_str("%H:%M")
         sms_message = (
             f"Payment received! KSh {amount:.2f} paid to Kodongo Trading Enterprises. "
             f"Your Outstanding loan balance is KSh {loan.remaining_amount:.2f} "

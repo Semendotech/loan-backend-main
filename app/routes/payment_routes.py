@@ -100,7 +100,8 @@ def record_payment(
         loan_after = db.query(Loan).options(selectinload(Loan.customer)).filter(Loan.id == payment.loan_id).first()
         customer_name = loan_after.customer.name if loan_after and loan_after.customer else "Unknown"
         balance_after = float(loan_after.remaining_amount) if loan_after else 0
-        now = _dt.utcnow().isoformat(timespec="seconds")
+        from app.utils import now_eat_str
+        now = now_eat_str()
         ref = payment.reference_number or "N/A"
         print("", flush=True)
         print("========== PAYMENT RECEIVED ==========", flush=True)
