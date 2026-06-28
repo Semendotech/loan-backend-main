@@ -34,9 +34,19 @@ def _maybe_sync(db):
 
 # ============ SCHEMAS ============
 
+class GuarantorRequest(BaseModel):
+    name: str
+    id_number: str
+    phone: str
+    location: Optional[str] = None
+    relationship: Optional[str] = None
+
 class LoanRequest(BaseModel):
+    id_number: str
     amount: float
-    guarantor_id: Optional[int] = None
+    interest_rate: float = 20.0
+    start_date: Optional[str] = None
+    guarantor: Optional[GuarantorRequest] = None
 
     class Config:
         from_attributes = True
@@ -333,6 +343,8 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
+
 
 
 
