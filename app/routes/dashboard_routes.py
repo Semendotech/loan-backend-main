@@ -225,13 +225,38 @@ def get_defaulters_list(
     total = query.count()
     defaulters = query.order_by(Loan.defaulter_flagged_date.desc()).limit(limit).offset(offset).all()
 
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timedelta as _td
+    from app.models import Installment as _Installment
+    from collections import defaultdict as _defaultdict
+
+    today = _dt.utcnow().date()
+    loan_ids = [d.id for d in defaulters]
+    all_installments = db.query(_Installment).filter(
+        _Installment.loan_id.in_(loan_ids),
+        func.date(_Installment.payment_date) <= today,
+    ).all() if loan_ids else []
+
+    sums_by_loan = _defaultdict(lambda: _defaultdict(float))
+    for inst in all_installments:
+        d = inst.payment_date.date() if isinstance(inst.payment_date, _dt) else inst.payment_date
+        sums_by_loan[inst.loan_id][d] += float(inst.amount or 0)
 
     def _days_defaulted(loan):
-        if not loan.defaulter_flagged_date:
-            return loan.days_since_start
-        flagged = loan.defaulter_flagged_date.date() if hasattr(loan.defaulter_flagged_date, "date") else loan.defaulter_flagged_date
-        return (_dt.utcnow().date() - flagged).days
+        daily = loan.daily_instalment
+        sums = sums_by_loan[loan.id]
+        start = loan.start_date.date() if isinstance(loan.start_date, _dt) else loan.start_date
+        if not start:
+            return 0
+        skipped = 0
+        current = today
+        while current >= start:
+            paid = sums.get(current, 0.0)
+            if paid < daily - 0.01:
+                skipped += 1
+                current -= _td(days=1)
+            else:
+                break
+        return skipped
 
     return {
         "items": [
