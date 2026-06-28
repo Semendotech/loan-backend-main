@@ -147,6 +147,7 @@ class Installment(Base):
     source = Column(String(30), nullable=False, default="manual")
     payment_method = Column(String(30), nullable=True)
     reference_number = Column(String(100), nullable=True)
+    balance_after = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship
@@ -199,3 +200,4 @@ class DefaulterFlag(Base):
     checked_date = Column(DateTime, default=datetime.utcnow)
 
     loan = orm_relationship("Loan")
+

@@ -221,6 +221,11 @@ class LoanService:
             raise ValueError(f"Loan {loan_id} not found")
 
         # Record the installment
+        # Reduce remaining amount first so balance_after is correct
+        loan.remaining_amount -= amount
+        if loan.remaining_amount < 0:
+            loan.remaining_amount = 0
+
         installment = Installment(
             loan_id=loan_id,
             amount=amount,
@@ -228,13 +233,9 @@ class LoanService:
             payment_method=payment_method,
             reference_number=reference,
             recorded_by=recorded_by,
+            balance_after=loan.remaining_amount,
         )
         db.add(installment)
-
-        # Reduce remaining amount
-        loan.remaining_amount -= amount
-        if loan.remaining_amount < 0:
-            loan.remaining_amount = 0
 
         loan.updated_at = datetime.utcnow()
 
@@ -516,6 +517,7 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
         await db.commit()
 
     return status_changed
+
 
 
 
