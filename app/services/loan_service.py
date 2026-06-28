@@ -275,12 +275,34 @@ class LoanService:
         db.commit()
 
     @staticmethod
-    def get_active_loans(db: Session, limit: int = 50, offset: int = 0) -> tuple[list, int]:
+    def get_active_loans(db: Session, limit: int = 50, offset: int = 0, search: str = "") -> tuple[list, int]:
         """
         Get ACTIVE loans (days 1-30 from creation).
-        
-        Filter: (today - start_date).days <= 30 AND status == ACTIVE
-        
+        Filter: status == ACTIVE AND (today - start_date).days <= 30
+        Returns: (loans list, total count)
+        """
+        from sqlalchemy.orm import selectinload
+        from app.models import Customer as _Customer
+        query = db.query(Loan).options(selectinload(Loan.customer)).join(Loan.customer).filter(
+            Loan.status == LoanStatus.ACTIVE,
+            func.datediff(func.now(), Loan.start_date) <= 30,
+        )
+        if search:
+            like = f"%{search}%"
+            query = query.filter(
+                (_Customer.name.ilike(like)) |
+                (_Customer.id_number.ilike(like)) |
+                (_Customer.phone.ilike(like))
+            )
+        total = query.count()
+        loans = query.limit(limit).offset(offset).all()
+        return loans, total
+
+    @staticmethod
+    def get_payable_loans(db: Session, limit: int = 50, offset: int = 0, search: str = "") -> tuple[list, int]:
+        """
+        Get all loans with an outstanding balance for the Pay Installments page.
+        Includes ACTIVE, OVERDUE, and ARREARS statuses (anything still owed).
         Returns: (loans list, total count)
         """
         from sqlalchemy.orm import selectinload
@@ -296,10 +318,8 @@ class LoanService:
                 (_Customer.id_number.ilike(like)) |
                 (_Customer.phone.ilike(like))
             )
-
         total = query.count()
         loans = query.limit(limit).offset(offset).all()
-
         return loans, total
 
     @staticmethod

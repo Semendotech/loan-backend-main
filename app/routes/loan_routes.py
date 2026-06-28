@@ -143,9 +143,44 @@ def get_active_loans(
     """
     import traceback
     try:
-        loans, total = LoanService.get_payable_loans(db, limit=limit, offset=offset, search=q)
+        loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset, search=q)
     except Exception as e:
         print('ACTIVE ERROR:', traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+    def _to_response(loan):
+        resp = LoanResponse.from_orm(loan)
+        if loan.customer:
+            resp.customer = CustomerBrief.from_orm(loan.customer)
+        return resp
+
+    return LoanListResponse(
+        items=[_to_response(loan) for loan in loans],
+        total=total,
+        count=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total,
+    )
+
+
+@router.get("/payable")
+def get_payable_loans(
+    limit: int = Query(50, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+    q: str = Query("", alias="q"),
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user_sync),
+):
+    """
+    Get loans with an outstanding balance for the Pay Installments page.
+    Includes ACTIVE, OVERDUE, and ARREARS statuses.
+    """
+    import traceback
+    try:
+        loans, total = LoanService.get_payable_loans(db, limit=limit, offset=offset, search=q)
+    except Exception as e:
+        print('PAYABLE ERROR:', traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
     def _to_response(loan):
