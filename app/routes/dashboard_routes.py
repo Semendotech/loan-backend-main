@@ -591,6 +591,10 @@ def get_uncollected_dues_report(
     )
 
 
+
+
+
+
 @router.get("/payments-report")
 def get_payments_report(
     date_str: str,
@@ -632,7 +636,7 @@ def get_payments_report(
             Installment.payment_date >= day_start,
             Installment.payment_date <= day_end,
         )
-        .order_by(Installment.payment_date)
+        .order_by(Installment.payment_date.desc())
         .all()
     )
 
@@ -653,15 +657,14 @@ def get_payments_report(
     )
     base = getSampleStyleSheet()
 
-    inst_style   = ParagraphStyle("Inst",   parent=base["Normal"], fontName="Helvetica-Bold", fontSize=17, textColor=NAVY, leading=20)
-    tag_style    = ParagraphStyle("Tag",    parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=8, textColor=GOLD, leading=10)
-    rt_style     = ParagraphStyle("RT",     parent=base["Normal"], fontName="Helvetica-Bold", fontSize=9, textColor=NAVY, leading=11, alignment=TA_RIGHT)
-    rs_style     = ParagraphStyle("RS",     parent=base["Normal"], fontName="Helvetica", fontSize=8, textColor=SLATE, leading=10, alignment=TA_RIGHT)
-    label_style  = ParagraphStyle("Lbl",    parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10)
-    val_style    = ParagraphStyle("Val",    parent=base["Normal"], fontName="Helvetica-Bold", fontSize=10, textColor=NAVY, leading=13)
-    sl_style     = ParagraphStyle("SL",     parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10, alignment=TA_CENTER)
-    sv_style     = ParagraphStyle("SV",     parent=base["Normal"], fontName="Helvetica-Bold", fontSize=13, textColor=NAVY, leading=16, alignment=TA_CENTER)
-    footer_style = ParagraphStyle("Ftr",    parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=7, textColor=SLATE, leading=10, alignment=TA_CENTER)
+    inst_style   = ParagraphStyle("Inst",  parent=base["Normal"], fontName="Helvetica-Bold", fontSize=17, textColor=NAVY, leading=20)
+    tag_style    = ParagraphStyle("Tag",   parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=8, textColor=GOLD, leading=10)
+    rt_style     = ParagraphStyle("RT",    parent=base["Normal"], fontName="Helvetica-Bold", fontSize=9, textColor=NAVY, leading=11, alignment=TA_RIGHT)
+    rs_style     = ParagraphStyle("RS",    parent=base["Normal"], fontName="Helvetica", fontSize=8, textColor=SLATE, leading=10, alignment=TA_RIGHT)
+    label_style  = ParagraphStyle("Lbl",   parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10)
+    sl_style     = ParagraphStyle("SL",    parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10, alignment=TA_CENTER)
+    sv_style     = ParagraphStyle("SV",    parent=base["Normal"], fontName="Helvetica-Bold", fontSize=13, textColor=NAVY, leading=16, alignment=TA_CENTER)
+    footer_style = ParagraphStyle("Ftr",   parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=7, textColor=SLATE, leading=10, alignment=TA_CENTER)
 
     story = []
 
@@ -721,38 +724,45 @@ def get_payments_report(
     if not installments:
         story.append(Paragraph("No payments recorded for this date.", base["Normal"]))
     else:
-        rows = [["TIME", "CUSTOMER", "LOAN #", "METHOD", "AMOUNT (KES)"]]
-        for inst in installments:
+        rows = [["#", "CUSTOMER", "ID", "PHONE", "AMOUNT (KES)", "TIME", "RECORDED BY", "BALANCE (KES)"]]
+        for idx, inst in enumerate(installments, 1):
             loan     = inst.loan
             customer = loan.customer if loan else None
-            time_str = inst.payment_date.strftime("%H:%M:%S") if inst.payment_date else "-"
-            method   = (inst.payment_method or "").strip() or "System"
+            time_str = inst.payment_date.strftime("%H:%M") if inst.payment_date else "-"
+            recorded_by = (inst.recorded_by or "").strip() or "System"
+            balance  = f"{float(inst.balance_after):,.2f}" if hasattr(inst, 'balance_after') and inst.balance_after is not None else (f"{float(loan.remaining_amount):,.2f}" if loan else "-")
             rows.append([
-                time_str,
+                str(idx),
                 customer.name if customer else "-",
-                str(loan.id) if loan else "-",
-                method,
+                customer.id_number if customer else "-",
+                customer.phone if customer else "-",
                 f"{float(inst.amount):,.2f}",
+                time_str,
+                recorded_by,
+                balance,
             ])
 
         tbl = Table(rows, repeatRows=1,
-                    colWidths=[20*mm, 55*mm, 18*mm, 30*mm, 35*mm])
+                    colWidths=[8*mm, 38*mm, 22*mm, 28*mm, 25*mm, 15*mm, 25*mm, 25*mm])
         tbl.setStyle(TableStyle([
             ("FONTNAME",       (0,0),(-1, 0), "Helvetica-Bold"),
             ("FONTNAME",       (0,1),(-1,-1), "Helvetica"),
-            ("FONTSIZE",       (0,0),(-1,-1), 8.5),
+            ("FONTSIZE",       (0,0),(-1,-1), 7.5),
             ("TEXTCOLOR",      (0,0),(-1, 0), SLATE),
             ("BACKGROUND",     (0,0),(-1, 0), LIGHT_BG),
             ("ALIGN",          (4,0),(4,-1),  "RIGHT"),
-            ("ALIGN",          (0,0),(3,-1),  "LEFT"),
+            ("ALIGN",          (7,0),(7,-1),  "RIGHT"),
+            ("ALIGN",          (0,0),(0,-1),  "CENTER"),
+            ("ALIGN",          (1,0),(3,-1),  "LEFT"),
+            ("ALIGN",          (5,0),(6,-1),  "CENTER"),
             ("LINEBELOW",      (0,0),(-1, 0), 0.75, BORDER),
             ("LINEBELOW",      (0,1),(-1,-2), 0.35, BORDER),
             ("BOX",            (0,0),(-1,-1), 0.75, BORDER),
             ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, LIGHT_BG]),
-            ("TOPPADDING",     (0,0),(-1,-1), 5),
-            ("BOTTOMPADDING",  (0,0),(-1,-1), 5),
-            ("LEFTPADDING",    (0,0),(-1,-1), 8),
-            ("RIGHTPADDING",   (0,0),(-1,-1), 8),
+            ("TOPPADDING",     (0,0),(-1,-1), 4),
+            ("BOTTOMPADDING",  (0,0),(-1,-1), 4),
+            ("LEFTPADDING",    (0,0),(-1,-1), 5),
+            ("RIGHTPADDING",   (0,0),(-1,-1), 5),
         ]))
         story.append(tbl)
 
