@@ -248,24 +248,6 @@ def update_installment(
         LoanService.check_defaulter_status(db, loan.id)
 
     db.refresh(installment)
-        from datetime import datetime as _dt
-        from sqlalchemy.orm import selectinload
-        loan_after = db.query(Loan).options(selectinload(Loan.customer)).filter(Loan.id == payment.loan_id).first()
-        customer_name = loan_after.customer.name if loan_after and loan_after.customer else "Unknown"
-        balance_after = float(loan_after.remaining_amount) if loan_after else 0
-        now = _dt.utcnow().isoformat(timespec="seconds")
-        ref = payment.reference_number or "N/A"
-        print("", flush=True)
-        print("========== PAYMENT RECEIVED ==========", flush=True)
-        print("Time         : " + now + " UTC", flush=True)
-        print("Customer     : " + customer_name, flush=True)
-        print("Amount       : KES " + str(round(payment.amount, 2)), flush=True)
-        print("Ref Number   : " + ref, flush=True)
-        print("Loan Balance : KES " + str(round(balance_after, 2)), flush=True)
-        print("Recorded By  : " + recorded_by_name, flush=True)
-        print("======================================", flush=True)
-        print("", flush=True)
-        return PaymentResponse.from_orm(installment)
 
 
 @router.delete("/installment/{installment_id}")
