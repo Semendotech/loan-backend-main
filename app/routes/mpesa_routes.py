@@ -232,16 +232,16 @@ async def mpesa_confirmation(
 
         logger.debug("Loan matched: id=%s remaining=%s", loan.id, loan.remaining_amount)
 
+        loan.remaining_amount = max(0, loan.remaining_amount - amount)
         installment = models.Installment(
             loan_id=loan.id,
             amount=amount,
             payment_date=datetime.utcnow(),
             recorded_by="System",
             source="daraja",
+            balance_after=loan.remaining_amount,
         )
         db.add(installment)
-
-        loan.remaining_amount = max(0, loan.remaining_amount - amount)
 
         if loan.remaining_amount <= 0:
             loan.status = models.LoanStatus.COMPLETED
@@ -394,4 +394,5 @@ async def simulate_payment():
         result = simulate_response.json()
         logger.info(f"Simulate response: {result}")
         return result
+
 
