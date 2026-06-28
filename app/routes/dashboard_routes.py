@@ -225,7 +225,8 @@ def get_defaulters_list(
     total = query.count()
     defaulters = query.order_by(Loan.defaulter_flagged_date.desc()).limit(limit).offset(offset).all()
 
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo, timedelta as _td
     from app.models import Installment as _Installment
     from collections import defaultdict as _defaultdict
 
@@ -603,6 +604,7 @@ def get_payments_report(
     """
     from io import BytesIO
     from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
     from fastapi.responses import StreamingResponse
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import (
@@ -620,8 +622,9 @@ def get_payments_report(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
 
-    day_start = _dt.combine(target_date, _dt.min.time())
-    day_end   = _dt.combine(target_date, _dt.max.time())
+    EAT = ZoneInfo("Africa/Nairobi")
+    day_start = _dt.combine(target_date, _dt.min.time(), tzinfo=EAT)
+    day_end   = _dt.combine(target_date, _dt.max.time(), tzinfo=EAT)
 
     installments = (
         db.query(Installment)
@@ -679,7 +682,7 @@ def get_payments_report(
     right_tbl = Table(
         [[Paragraph("PAYMENTS REPORT", rt_style)],
          [Paragraph(f"Date: {target_date.strftime('%d %b %Y')}", rs_style)],
-         [Paragraph(f"Generated: {_dt.utcnow().strftime('%d %b %Y, %H:%M')} UTC", rs_style)]],
+         [Paragraph(f"Generated: {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %b %Y, %H:%M')} EAT", rs_style)]],
         colWidths=[None],
     )
     right_tbl.setStyle(TableStyle([
@@ -768,7 +771,7 @@ def get_payments_report(
     story.append(Spacer(1, 18))
     story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
     story.append(Paragraph(
-        f"Generated on {_dt.utcnow().strftime('%d %B %Y at %H:%M UTC')}. "
+        f"Generated on {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %B %Y at %H:%M EAT')}. "
         f"This report is for internal use only. Kodongo Savings & Credit.",
         footer_style,
     ))
@@ -797,7 +800,8 @@ def get_cleared_loans_report(
     Supports period shortcuts or custom start_date/end_date.
     """
     from io import BytesIO
-    from datetime import datetime as _dt, date as _date, timedelta
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo, date as _date, timedelta
     from fastapi.responses import StreamingResponse
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import (
@@ -891,7 +895,7 @@ def get_cleared_loans_report(
     right_tbl = Table(
         [[Paragraph("CLEARED LOANS REPORT", rt_style)],
          [Paragraph(f"Period: {date_label}", rs_style)],
-         [Paragraph(f"Generated: {_dt.utcnow().strftime('%d %b %Y, %H:%M')} UTC", rs_style)]],
+         [Paragraph(f"Generated: {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %b %Y, %H:%M')} EAT", rs_style)]],
         colWidths=[None],
     )
     right_tbl.setStyle(TableStyle([
@@ -967,7 +971,7 @@ def get_cleared_loans_report(
     story.append(Spacer(1, 18))
     story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
     story.append(Paragraph(
-        f"Generated on {_dt.utcnow().strftime('%d %B %Y at %H:%M UTC')}. "
+        f"Generated on {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %B %Y at %H:%M EAT')}. "
         f"This report is for internal use only. Kodongo Savings & Credit.",
         footer_style,
     ))
