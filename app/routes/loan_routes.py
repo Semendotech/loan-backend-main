@@ -143,7 +143,7 @@ def get_active_loans(
     """
     import traceback
     try:
-        loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset, search=q)
+        loans, total = LoanService.get_payable_loans(db, limit=limit, offset=offset, search=q)
     except Exception as e:
         print('ACTIVE ERROR:', traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
