@@ -159,11 +159,13 @@ async def mpesa_confirmation(
             elif digits.startswith("7") and len(digits) == 9:
                 normalized_msisdn = "254" + digits
 
-        msisdn_hash = (
-            hashlib.sha256(normalized_msisdn.encode()).hexdigest()
-            if normalized_msisdn
-            else None
-        )
+        # If normalization failed, raw_msisdn may already be a SHA256 hash (C2B v2)
+        if normalized_msisdn:
+            msisdn_hash = hashlib.sha256(normalized_msisdn.encode()).hexdigest()
+        elif raw_msisdn and len(raw_msisdn) == 64 and all(c in "0123456789abcdef" for c in raw_msisdn):
+            msisdn_hash = raw_msisdn  # already a SHA256 hash from Safaricom
+        else:
+            msisdn_hash = None
 
         if not all([trans_id, msisdn_hash, amount > 0]):
             logger.error(
