@@ -136,6 +136,8 @@ async def mpesa_confirmation(
     try:
         body = await request.body()
         raw = body.decode("utf-8")
+        print(">>> MPESA CALLBACK RECEIVED", flush=True)
+        print(">>> RAW BODY: " + raw[:200], flush=True)
         logger.debug("Raw callback body: %s", raw)
 
         data = json.loads(raw)
@@ -392,3 +394,4 @@ async def simulate_payment():
         result = simulate_response.json()
         logger.info(f"Simulate response: {result}")
         return result
+
