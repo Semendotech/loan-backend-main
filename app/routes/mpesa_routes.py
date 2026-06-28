@@ -328,6 +328,96 @@ async def get_unmatched_payments(db: AsyncSession = Depends(get_db)):
     ]
 
 
+@router.get("/unmatched-payments-pdf")
+async def get_unmatched_payments_pdf(db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    from io import BytesIO
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+
+    EAT = ZoneInfo("Africa/Nairobi")
+    now_eat = _dt.now(EAT).strftime("%d %b %Y, %H:%M")
+
+    result = await db.execute(
+        select(models.MpesaTransaction)
+        .where(models.MpesaTransaction.loan_id == None)
+        .order_by(models.MpesaTransaction.created_at.desc())
+    )
+    transactions = result.scalars().all()
+    total = sum(float(tx.amount or 0) for tx in transactions)
+
+    NAVY  = colors.HexColor("#0f2942")
+    SLATE = colors.HexColor("#475569")
+    LIGHT = colors.HexColor("#f8fafc")
+    BORDER= colors.HexColor("#cbd5e1")
+    GOLD  = colors.HexColor("#c9a84c")
+    RED   = colors.HexColor("#dc2626")
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=14*mm, bottomMargin=14*mm, leftMargin=18*mm, rightMargin=18*mm)
+    base = getSampleStyleSheet()
+    inst_style  = ParagraphStyle("I", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=17, textColor=NAVY)
+    tag_style   = ParagraphStyle("T", parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=8, textColor=GOLD)
+    rt_style    = ParagraphStyle("R", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=9, textColor=NAVY, alignment=TA_RIGHT)
+    rs_style    = ParagraphStyle("S", parent=base["Normal"], fontName="Helvetica", fontSize=8, textColor=SLATE, alignment=TA_RIGHT)
+    sl_style    = ParagraphStyle("SL", parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, alignment=TA_CENTER)
+    sv_style    = ParagraphStyle("SV", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=13, textColor=NAVY, alignment=TA_CENTER)
+    ftr_style   = ParagraphStyle("F", parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=7, textColor=SLATE, alignment=TA_CENTER)
+
+    story = []
+    left_tbl = Table([[Paragraph("KODONGO SAVINGS & CREDIT", inst_style)],[Paragraph("Trusted Financial Solutions", tag_style)]], colWidths=[None])
+    left_tbl.setStyle(TableStyle([("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+    right_tbl = Table([[Paragraph("UNMATCHED PAYMENTS", rt_style)],[Paragraph(f"Generated: {now_eat} EAT", rs_style)]], colWidths=[None])
+    right_tbl.setStyle(TableStyle([("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+    hdr = Table([[left_tbl, right_tbl]], colWidths=["60%","40%"])
+    hdr.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0)]))
+    story.append(hdr)
+    story.append(Spacer(1,5))
+    story.append(HRFlowable(width="100%", thickness=2.5, color=NAVY, spaceAfter=2))
+    story.append(HRFlowable(width="100%", thickness=1, color=GOLD, spaceAfter=10))
+
+    sum_tbl = Table([[Paragraph("TOTAL UNMATCHED", sl_style), Paragraph("TOTAL AMOUNT", sl_style)],[Paragraph(str(len(transactions)), sv_style), Paragraph(f"KES {total:,.2f}", sv_style)]], colWidths=["30%","70%"])
+    sum_tbl.setStyle(TableStyle([("BOX",(0,0),(-1,-1),0.75,BORDER),("LINEAFTER",(0,0),(0,-1),0.5,BORDER),("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6)]))
+    story.append(sum_tbl)
+    story.append(Spacer(1,14))
+
+    if not transactions:
+        story.append(Paragraph("No unmatched payments on record.", base["Normal"]))
+    else:
+        rows = [["#", "TRANSACTION ID", "SENDER NAME", "PHONE", "AMOUNT (KES)", "DATE", "TIME"]]
+        for idx, tx in enumerate(transactions, 1):
+            phone_display = tx.phone if (tx.phone and len(tx.phone) != 64) else "Unknown"
+            date_str = tx.created_at.strftime("%d/%m/%Y") if tx.created_at else "-"
+            time_str = tx.created_at.strftime("%H:%M") if tx.created_at else "-"
+            rows.append([str(idx), tx.trans_id, tx.sender_name or "-", phone_display, f"{float(tx.amount):,.2f}", date_str, time_str])
+
+        tbl = Table(rows, repeatRows=1, colWidths=[8*mm, 28*mm, 40*mm, 30*mm, 25*mm, 20*mm, 15*mm])
+        tbl.setStyle(TableStyle([
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTNAME",(0,1),(-1,-1),"Helvetica"),
+            ("FONTSIZE",(0,0),(-1,-1),7.5),("TEXTCOLOR",(0,0),(-1,0),SLATE),
+            ("BACKGROUND",(0,0),(-1,0),LIGHT),("ALIGN",(4,0),(4,-1),"RIGHT"),
+            ("ALIGN",(0,0),(0,-1),"CENTER"),("LINEBELOW",(0,0),(-1,0),0.75,BORDER),
+            ("LINEBELOW",(0,1),(-1,-2),0.35,BORDER),("BOX",(0,0),(-1,-1),0.75,BORDER),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,LIGHT]),
+            ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ("LEFTPADDING",(0,0),(-1,-1),5),("RIGHTPADDING",(0,0),(-1,-1),5),
+        ]))
+        story.append(tbl)
+
+    story.append(Spacer(1,18))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
+    story.append(Paragraph(f"Generated on {now_eat} EAT. Kodongo Savings & Credit.", ftr_style))
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=unmatched_payments_{_dt.now(EAT).strftime('%Y-%m-%d')}.pdf"})
+
+
 @router.post("/register-urls")
 async def register_urls():
     consumer_key = os.getenv("MPESA_CONSUMER_KEY")
