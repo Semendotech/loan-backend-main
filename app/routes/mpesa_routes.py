@@ -76,8 +76,8 @@ def _log_unmatched_payment(
 
 
 async def send_sms(phone: str, message: str) -> bool:
-    api_key = os.getenv("AFRICAS_TALKING_API_KEY")
-    username = os.getenv("AFRICAS_TALKING_USERNAME")
+    api_key = os.getenv("MOBITECH_API_KEY", "9e4805a6dc8ef25784b1c2893238b6af959eae070b7ffc5a33115ec11ac57b17")
+    sender_name = os.getenv("MOBITECH_SENDER_ID", "FULL_CIRCLE")
 
     if not api_key:
         logger.error("AFRICAS_TALKING_API_KEY not configured")
