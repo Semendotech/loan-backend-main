@@ -918,7 +918,7 @@ async def get_customer_statement_pdf(
                 table_data.append([
                     date_part,
                     time_part[:8] if time_part else "-",
-                    inst.get("payment_method") or "-",
+                    (inst.get("payment_method") or "").strip() or "System",
                     f"{inst['amount']:,.2f}",
                     f"{inst['balance_after']:,.2f}",
                 ])
@@ -980,4 +980,5 @@ async def get_customer_statement_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=statement_{safe_name}_{customer_id}.pdf"},
     )
+
 
