@@ -268,3 +268,70 @@ def delete_installment(
     return {"message": "Installment deleted successfully"}
 
 
+
+@router.get("/all")
+def get_all_payments(
+    limit: int = Query(50, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    q: str = Query(None),
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get all payments across all loans, with optional date range and search.
+    """
+    from datetime import datetime as _dt
+    from sqlalchemy.orm import selectinload
+    from app.models import Customer
+
+    query = (
+        db.query(Installment)
+        .options(selectinload(Installment.loan).selectinload(Loan.customer))
+    )
+
+    if start_date:
+        try:
+            dt_start = _dt.strptime(start_date, "%Y-%m-%d")
+            query = query.filter(Installment.payment_date >= dt_start)
+        except ValueError:
+            pass
+
+    if end_date:
+        try:
+            dt_end = _dt.combine(_dt.strptime(end_date, "%Y-%m-%d").date(), _dt.max.time())
+            query = query.filter(Installment.payment_date <= dt_end)
+        except ValueError:
+            pass
+
+    if q and q.strip():
+        search = f"%{q.strip()}%"
+        query = query.join(Installment.loan).join(Loan.customer).filter(
+            (Customer.name.ilike(search)) |
+            (Customer.id_number.ilike(search)) |
+            (Customer.phone.ilike(search))
+        )
+
+    total = query.count()
+    installments = query.order_by(Installment.payment_date.desc()).limit(limit).offset(offset).all()
+
+    items = []
+    for inst in installments:
+        loan = inst.loan
+        customer = loan.customer if loan else None
+        items.append({
+            "id": inst.id,
+            "loan_id": inst.loan_id,
+            "customer_name": customer.name if customer else "-",
+            "customer_id_number": customer.id_number if customer else "-",
+            "customer_phone": customer.phone if customer else "-",
+            "amount": float(inst.amount or 0),
+            "balance_after": float(inst.balance_after) if inst.balance_after is not None else None,
+            "payment_date": inst.payment_date.isoformat() if inst.payment_date else None,
+            "payment_method": inst.payment_method or "CASH",
+            "recorded_by": inst.recorded_by or "System",
+            "reference_number": inst.reference_number,
+        })
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
