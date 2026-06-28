@@ -147,6 +147,10 @@ async def mpesa_confirmation(
         raw_msisdn = data.get("MSISDN", "")
         timestamp = data.get("TransTime", "")
         amount = float(data.get("TransAmount", 0))
+        first_name = data.get("FirstName", "").strip()
+        middle_name = data.get("MiddleName", "").strip()
+        last_name = data.get("LastName", "").strip()
+        sender_name = " ".join(filter(None, [first_name, middle_name, last_name])) or None
         print(">>> PARSED: trans_id=" + trans_id + " msisdn=" + raw_msisdn + " amount=" + str(amount), flush=True)
 
         normalized_msisdn = None
@@ -198,6 +202,7 @@ async def mpesa_confirmation(
                 amount=amount,
                 phone=normalized_msisdn or raw_msisdn,
                 loan_id=None,
+                sender_name=sender_name,
             )
             db.add(unmatched_tx)
             await db.commit()
@@ -229,6 +234,7 @@ async def mpesa_confirmation(
                 amount=amount,
                 phone=customer.phone or normalized_msisdn or raw_msisdn,
                 loan_id=None,
+                sender_name=sender_name or customer.name,
             )
             db.add(unmatched_tx)
             await db.commit()
@@ -315,6 +321,7 @@ async def get_unmatched_payments(db: AsyncSession = Depends(get_db)):
             "trans_id": tx.trans_id,
             "amount": tx.amount,
             "phone": tx.phone,
+            "sender_name": tx.sender_name or "",
             "created_at": tx.created_at.isoformat() if tx.created_at else None,
         }
         for tx in transactions

@@ -179,6 +179,7 @@ class MpesaTransaction(Base):
     trans_id = Column(String(100), unique=True, nullable=False)  # Safaricom transaction ID
     amount = Column(Float, nullable=False)
     phone = Column(String(64), nullable=True)  # Customer phone or hash
+    sender_name = Column(String(100), nullable=True)  # Name from Safaricom callback
     loan_id = Column(Integer, ForeignKey("loans.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
