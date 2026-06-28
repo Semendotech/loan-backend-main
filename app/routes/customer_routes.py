@@ -606,3 +606,83 @@ async def delete_customer(
         "customer_id": customer_id
     }
 
+
+
+@router.get("/{customer_id}/statement")
+async def get_customer_statement(
+    customer_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Full banking-style statement for a customer: every loan ever taken,
+    every installment payment, with running balance after each payment.
+    """
+    result = await db.execute(select(Customer).filter(Customer.id == customer_id))
+    customer = result.scalar_one_or_none()
+    if not customer:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    loans_result = await db.execute(
+        select(Loan)
+        .options(selectinload(Loan.installments), selectinload(Loan.guarantor))
+        .filter(Loan.customer_id == customer.id_number)
+        .order_by(Loan.start_date.asc(), Loan.created_at.asc())
+    )
+    loans = loans_result.scalars().all()
+
+    loan_statements = []
+    lifetime_borrowed = 0.0
+    lifetime_paid = 0.0
+
+    for loan in loans:
+        installments = sorted(loan.installments or [], key=lambda i: i.payment_date)
+        running_balance = float(loan.total_amount or 0)
+        ledger = []
+        for inst in installments:
+            running_balance = max(0.0, running_balance - float(inst.amount or 0))
+            ledger.append({
+                "installment_id": inst.id,
+                "payment_date": inst.payment_date,
+                "amount": inst.amount,
+                "payment_method": inst.payment_method,
+                "reference_number": inst.reference_number,
+                "balance_after": round(running_balance, 2),
+            })
+            lifetime_paid += float(inst.amount or 0)
+
+        lifetime_borrowed += float(loan.amount or 0)
+
+        loan_statements.append({
+            "loan_id": loan.id,
+            "amount": loan.amount,
+            "interest_rate": loan.interest_rate,
+            "total_amount": loan.total_amount,
+            "remaining_amount": loan.remaining_amount,
+            "start_date": loan.start_date,
+            "due_date": loan.due_date,
+            "completed_at": loan.completed_at,
+            "status": loan.status.value,
+            "guarantor": ({
+                "name": loan.guarantor.name,
+                "phone": loan.guarantor.phone,
+            } if loan.guarantor else None),
+            "installments": ledger,
+        })
+
+    return {
+        "customer": {
+            "id": customer.id,
+            "name": customer.name,
+            "id_number": customer.id_number,
+            "phone": customer.phone,
+            "location": customer.location,
+            "registered_at": customer.created_at,
+        },
+        "summary": {
+            "total_loans": len(loans),
+            "lifetime_borrowed": round(lifetime_borrowed, 2),
+            "lifetime_paid": round(lifetime_paid, 2),
+        },
+        "loans": loan_statements,
+    }
