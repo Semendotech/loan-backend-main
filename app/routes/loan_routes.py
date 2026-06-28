@@ -1,4 +1,4 @@
-﻿"""
+"""
 CORRECTED Loan Routes
 - /active endpoint uses CORRECT filter: days since creation <= 30
 - Removed broken due_date filter
@@ -135,7 +135,7 @@ def get_active_loans(
     Get ACTIVE loans (days 1-30 from creation).
     
     CORRECTED FILTER:
-    - (today - start_date).days <= 30  â† Days since creation (NOT due_date)
+    - (today - start_date).days <= 30  ← Days since creation (NOT due_date)
     - status == ACTIVE
     
     This ensures loans are shown during their active 30-day period,
@@ -333,6 +333,7 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
 
 
 
