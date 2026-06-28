@@ -205,7 +205,7 @@ class LoanService:
         return is_defaulter
 
     @staticmethod
-    def record_payment(db: Session, loan_id: int, amount: float, payment_method: str = None, reference: str = None) -> Installment:
+    def record_payment(db: Session, loan_id: int, amount: float, payment_method: str = None, reference: str = None, recorded_by: str = None) -> Installment:
         """
         Record a payment against a loan.
         
@@ -227,6 +227,7 @@ class LoanService:
             payment_date=datetime.utcnow(),
             payment_method=payment_method,
             reference_number=reference,
+            recorded_by=recorded_by,
         )
         db.add(installment)
 

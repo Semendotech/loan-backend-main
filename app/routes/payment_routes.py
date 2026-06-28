@@ -85,12 +85,14 @@ def record_payment(
 
     try:
         # Record payment using LoanService (handles all syncing)
+        recorded_by_name = (getattr(current_user, "first_name", None) or getattr(current_user, "username", None) or "Unknown")
         installment = LoanService.record_payment(
             db=db,
             loan_id=payment.loan_id,
             amount=payment.amount,
             payment_method=payment.payment_method,
             reference=payment.reference_number,
+            recorded_by=recorded_by_name,
         )
 
         return PaymentResponse.from_orm(installment)
