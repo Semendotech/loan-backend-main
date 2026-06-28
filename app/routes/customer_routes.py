@@ -157,21 +157,25 @@ async def list_customers(
     result = await db.execute(stmt)
     customers = result.scalars().all()
 
-    # Determine which customers currently have ACTIVE loans only
-    # (Overdue loans are tracked separately via Arrears table)
+    # Determine each customer's current loan status: Active, Overdue, Defaulter, or Clean
     customer_id_numbers = [c.id_number for c in customers]
+    status_by_customer = {}
     if customer_id_numbers:
-        active_result = await db.execute(
-          select(Loan.customer_id).filter(
-              Loan.customer_id.in_(customer_id_numbers),
-              Loan.status == LoanStatus.ACTIVE  # ONLY ACTIVE, not OVERDUE
-          )
+        loans_result = await db.execute(
+            select(Loan.customer_id, Loan.status, Loan.is_defaulter).filter(
+                Loan.customer_id.in_(customer_id_numbers),
+                Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
+            )
         )
-        active_customer_ids = {row[0] for row in active_result.fetchall()}
-    else:
-        active_customer_ids = set()
+        for cust_id, loan_status, is_defaulter in loans_result.fetchall():
+            if is_defaulter:
+                status_by_customer[cust_id] = "Defaulter"
+            elif loan_status == LoanStatus.OVERDUE and status_by_customer.get(cust_id) != "Defaulter":
+                status_by_customer[cust_id] = "Overdue"
+            elif cust_id not in status_by_customer:
+                status_by_customer[cust_id] = "Active"
 
-    # Return serialized payload with has_active_loan flag and pagination metadata
+    # Return serialized payload with computed status and pagination metadata
     return {
         "items": [
             {
@@ -182,7 +186,8 @@ async def list_customers(
                 "location": c.location,
                 "profile_image_url": c.profile_image_url,
                 "created_at": c.created_at,
-                "has_active_loan": c.id_number in active_customer_ids,  # Only ACTIVE
+                "status": status_by_customer.get(c.id_number, "Clean"),
+                "has_active_loan": status_by_customer.get(c.id_number) == "Active",
             }
             for c in customers
         ],
