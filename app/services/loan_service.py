@@ -261,7 +261,7 @@ class LoanService:
         """
         # Get all non-completed loans
         loans = db.query(Loan).filter(
-            Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE])
+            Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS])
         ).all()
 
         for loan in loans:
@@ -285,7 +285,7 @@ class LoanService:
         """
         from sqlalchemy.orm import selectinload
         query = db.query(Loan).options(selectinload(Loan.customer)).filter(
-            Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
+            Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS]),
             Loan.remaining_amount > 0,
         )
 
@@ -487,4 +487,5 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
         await db.commit()
 
     return status_changed
+
 
