@@ -67,9 +67,7 @@ def get_arrears(
     - is_cleared = false means still owed
     - is_cleared = true means overdue loan was fully paid
     """
-    # First sync all loans to ensure overdue status is current
-    LoanService.daily_sync_all_loans(db)
-
+    # Note: full sync is handled by the scheduled /admin/sync job, not on every page load
     query = db.query(Arrears)
 
     if only_active:

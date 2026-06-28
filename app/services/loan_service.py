@@ -283,7 +283,8 @@ class LoanService:
         
         Returns: (loans list, total count)
         """
-        query = db.query(Loan).filter(
+        from sqlalchemy.orm import selectinload
+        query = db.query(Loan).options(selectinload(Loan.customer)).filter(
             Loan.status == LoanStatus.ACTIVE,
             (func.datediff(func.now(), Loan.start_date)) <= 30,
         )
@@ -302,7 +303,8 @@ class LoanService:
         
         Returns: (loans list, total count)
         """
-        query = db.query(Loan).filter(Loan.status == LoanStatus.OVERDUE)
+        from sqlalchemy.orm import selectinload
+        query = db.query(Loan).options(selectinload(Loan.customer)).filter(Loan.status == LoanStatus.OVERDUE)
 
         total = query.count()
         loans = query.limit(limit).offset(offset).all()
@@ -337,7 +339,8 @@ class LoanService:
         
         Returns: (loans list, total count)
         """
-        query = db.query(Loan).filter(Loan.status == LoanStatus.COMPLETED)
+        from sqlalchemy.orm import selectinload
+        query = db.query(Loan).options(selectinload(Loan.customer)).filter(Loan.status == LoanStatus.COMPLETED)
 
         total = query.count()
         loans = query.limit(limit).offset(offset).all()
