@@ -20,10 +20,11 @@ class LoanService:
     @staticmethod
     def create_loan(
         db: Session,
-        customer_id: str,
+        customer_id: int,
         amount: float,
-        guarantor_id: str = None,
-        interest_rate: float = 20.0
+        guarantor_id: int = None,
+        interest_rate: float = 20.0,
+        start_date=None,
     ) -> Loan:
         """
         Create a new loan.
@@ -34,7 +35,9 @@ class LoanService:
         - total_amount = amount + (amount * interest_rate / 100)
         - is_defaulter = False initially
         """
-        start_date = datetime.utcnow()
+        from datetime import date as _date
+        if start_date is None:
+            start_date = _date.today()
         due_date = start_date + timedelta(days=30)
         total_amount = amount * (1 + interest_rate / 100)
 
@@ -517,6 +520,8 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
         await db.commit()
 
     return status_changed
+
+
 
 
 
