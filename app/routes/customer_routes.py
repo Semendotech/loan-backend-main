@@ -686,3 +686,93 @@ async def get_customer_statement(
         },
         "loans": loan_statements,
     }
+
+
+@router.get("/{customer_id}/statement/pdf")
+async def get_customer_statement_pdf(
+    customer_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Printable PDF version of the customer statement."""
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+
+    data = await get_customer_statement(customer_id=customer_id, db=db, current_user=current_user)
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=18 * mm, bottomMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    story = []
+
+    cust = data["customer"]
+    summary = data["summary"]
+
+    story.append(Paragraph("Loan Account Statement", styles["Title"]))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(f"Customer: {cust['name']}", styles["Normal"]))
+    story.append(Paragraph(f"ID Number: {cust['id_number']}", styles["Normal"]))
+    story.append(Paragraph(f"Phone: {cust['phone']}", styles["Normal"]))
+    story.append(Paragraph(f"Location: {cust.get('location') or '-'}", styles["Normal"]))
+    story.append(Paragraph(f"Customer Since: {cust['registered_at']}", styles["Normal"]))
+    story.append(Spacer(1, 10))
+
+    story.append(Paragraph(
+        f"Total Loans: {summary['total_loans']} | "
+        f"Lifetime Borrowed: KES {summary['lifetime_borrowed']:,.2f} | "
+        f"Lifetime Paid: KES {summary['lifetime_paid']:,.2f}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 14))
+
+    for loan in data["loans"]:
+        story.append(Paragraph(
+            f"Loan #{loan['loan_id']} — Opened {loan['start_date']} — Status: {loan['status']}",
+            styles["Heading3"],
+        ))
+        story.append(Paragraph(
+            f"Principal: KES {loan['amount']:,.2f} | Interest: {loan['interest_rate']}% | "
+            f"Total Due: KES {loan['total_amount']:,.2f} | Remaining: KES {loan['remaining_amount']:,.2f}",
+            styles["Normal"],
+        ))
+        story.append(Spacer(1, 6))
+
+        table_data = [["Date", "Time", "Amount Paid", "Balance After"]]
+        if loan["installments"]:
+            for inst in loan["installments"]:
+                pay_dt = str(inst["payment_date"])
+                date_part, _, time_part = pay_dt.partition(" ")
+                table_data.append([
+                    date_part,
+                    time_part or "-",
+                    f"KES {inst['amount']:,.2f}",
+                    f"KES {inst['balance_after']:,.2f}",
+                ])
+        else:
+            table_data.append(["-", "-", "No payments recorded", "-"])
+
+        tbl = Table(table_data, repeatRows=1, hAlign="LEFT")
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 16))
+
+    doc.build(story)
+    buffer.seek(0)
+
+    safe_name = "".join(c for c in cust["name"] if c.isalnum() or c in " -").strip().replace(" ", "_")
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=statement_{safe_name}_{customer_id}.pdf"},
+    )
