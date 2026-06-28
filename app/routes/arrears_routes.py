@@ -24,6 +24,9 @@ class ArrearsResponse(BaseModel):
     id: int
     loan_id: int
     customer_id: int
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_id_number: Optional[str] = None
     original_amount: float
     remaining_amount: float
     is_cleared: bool
@@ -68,7 +71,8 @@ def get_arrears(
     - is_cleared = true means overdue loan was fully paid
     """
     # Note: full sync is handled by the scheduled /admin/sync job, not on every page load
-    query = db.query(Arrears)
+    from sqlalchemy.orm import selectinload
+    query = db.query(Arrears).options(selectinload(Arrears.customer))
 
     if only_active:
         query = query.filter(Arrears.is_cleared == False)
@@ -76,8 +80,17 @@ def get_arrears(
     total = query.count()
     arrears_records = query.order_by(Arrears.arrears_date.desc()).limit(limit).offset(offset).all()
 
+    items = []
+    for a in arrears_records:
+        resp = ArrearsResponse.model_validate(a, from_attributes=True)
+        if a.customer:
+            resp.customer_name = a.customer.name
+            resp.customer_phone = a.customer.phone
+            resp.customer_id_number = a.customer.id_number
+        items.append(resp)
+
     return ArrearsListResponse(
-        items=[ArrearsResponse.from_orm(a) for a in arrears_records],
+        items=items,
         total=total,
         limit=limit,
         offset=offset,

@@ -157,7 +157,7 @@ class Arrears(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     loan_id = Column(Integer, ForeignKey("loans.id"), nullable=False, unique=True)
-    customer_id = Column(String(30), ForeignKey("customers.id_number"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     original_amount = Column(Float, nullable=False)  # Original loan amount
     remaining_amount = Column(Float, nullable=False)  # Unpaid amount including interest
     arrears_date = Column(Date, nullable=False, default=datetime.utcnow().date)
