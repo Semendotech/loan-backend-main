@@ -289,6 +289,9 @@ async def mpesa_confirmation(
 
     except Exception as e:
         await db.rollback()
+        import traceback
+        print(">>> MPESA CALLBACK ERROR: " + str(e), flush=True)
+        print(traceback.format_exc(), flush=True)
         logger.error(f"Error processing payment: {str(e)}")
         return {"ResultCode": 0, "ResultDesc": "Payment received - processing error"}
 
