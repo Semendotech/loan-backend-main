@@ -1,4 +1,4 @@
-"""
+﻿"""
 CORRECTED Loan Routes
 - /active endpoint uses CORRECT filter: days since creation <= 30
 - Removed broken due_date filter
@@ -127,6 +127,7 @@ def create_loan(
 def get_active_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
+    q: str = Query("", alias="q"),
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user_sync),
 ):
@@ -134,7 +135,7 @@ def get_active_loans(
     Get ACTIVE loans (days 1-30 from creation).
     
     CORRECTED FILTER:
-    - (today - start_date).days <= 30  ← Days since creation (NOT due_date)
+    - (today - start_date).days <= 30  â† Days since creation (NOT due_date)
     - status == ACTIVE
     
     This ensures loans are shown during their active 30-day period,
@@ -142,7 +143,7 @@ def get_active_loans(
     """
     import traceback
     try:
-        loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset)
+        loans, total = LoanService.get_active_loans(db, limit=limit, offset=offset, search=q)
     except Exception as e:
         print('ACTIVE ERROR:', traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
@@ -297,6 +298,8 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
+
 
 
 

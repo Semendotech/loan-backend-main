@@ -284,10 +284,18 @@ class LoanService:
         Returns: (loans list, total count)
         """
         from sqlalchemy.orm import selectinload
-        query = db.query(Loan).options(selectinload(Loan.customer)).filter(
+        from app.models import Customer as _Customer
+        query = db.query(Loan).options(selectinload(Loan.customer)).join(Loan.customer).filter(
             Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS]),
             Loan.remaining_amount > 0,
         )
+        if search:
+            like = f"%{search}%"
+            query = query.filter(
+                (_Customer.name.ilike(like)) |
+                (_Customer.id_number.ilike(like)) |
+                (_Customer.phone.ilike(like))
+            )
 
         total = query.count()
         loans = query.limit(limit).offset(offset).all()
@@ -487,5 +495,6 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
         await db.commit()
 
     return status_changed
+
 
 
