@@ -77,30 +77,31 @@ def _log_unmatched_payment(
 
 
 async def send_sms(phone: str, message: str) -> bool:
-    api_key = os.getenv("MOBITECH_API_KEY", "9e4805a6dc8ef25784b1c2893238b6af959eae070b7ffc5a33115ec11ac57b17")
-    sender_name = os.getenv("MOBITECH_SENDER_ID", "FULL_CIRCLE")
+    api_key = os.getenv("MOBITECH_API_KEY", "")
+    username = os.getenv("MOBITECH_USERNAME", "")
+    sender_id = os.getenv("MOBITECH_SENDER_ID", "FULL_CIRCLE")
 
     if not api_key:
-        logger.error("AFRICAS_TALKING_API_KEY not configured")
+        logger.error("MOBITECH_API_KEY not configured")
         return False
-
     if not username:
-        logger.error("AFRICAS_TALKING_USERNAME not configured")
+        logger.error("MOBITECH_USERNAME not configured")
         return False
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "https://api.africastalking.com/version1/messaging",
+                "https://app.mobitechtechnologies.com/sms/sendsms",
                 headers={
-                    "apiKey": api_key,
-                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
-                data={
+                json={
+                    "api_key": api_key,
                     "username": username,
-                    "to": phone,
+                    "sender_id": sender_id,
                     "message": message,
+                    "phone": phone,
                 },
             )
             logger.info(f"SMS API Response Status: {response.status_code}")
@@ -109,28 +110,11 @@ async def send_sms(phone: str, message: str) -> bool:
                 logger.info(f"SMS sent successfully to {phone}")
                 return True
             else:
-                logger.error(f"SMS failed to send to {phone}: {response.text}")
+                logger.error(f"SMS send failed: {response.text}")
                 return False
     except Exception as e:
-        logger.error(f"Error sending SMS: {str(e)}")
+        logger.error(f"SMS send exception: {e}")
         return False
-
-
-class MpesaCallbackData(BaseModel):
-    TransactionType: str = ""
-    TransID: str = ""
-    TransTime: str = ""
-    TransAmount: str = ""
-    BusinessShortCode: str = ""
-    BillRefNumber: str = ""
-    InvoiceNumber: str = ""
-    OrgAccountBalance: str = ""
-    ThirdPartyTransID: str = ""
-    MSISDN: str = ""
-    FirstName: str = ""
-    MiddleName: str = ""
-    LastName: str = ""
-
 
 @router.post("/confirmation")
 async def mpesa_confirmation(
