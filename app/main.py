@@ -15,14 +15,19 @@ from app.utils import hash_password
 from app.routes import auth_routes, customer_routes, loan_routes, dashboard_routes, payment_routes, arrears_routes, mpesa_routes, admin_routes
 from app.routes.user_routes import router as user_routes
 
-# Configure logging to output to stdout at INFO level
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler()
-    ]
-)
+# Force logging to output to stdout at INFO level
+# This overrides any prior logging config (e.g., from Uvicorn)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+# Clear any existing handlers
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+# Add stdout handler
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+handler.setFormatter(formatter)
+root_logger.addHandler(handler)
 
 app = FastAPI(title="Loan Management System")
 
@@ -41,7 +46,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-)
 
 # routers
 app.include_router(auth_routes.router)
@@ -138,3 +142,4 @@ async def root():
 @app.get('/health')
 def health():
     return {'status': 'ok'}
+
