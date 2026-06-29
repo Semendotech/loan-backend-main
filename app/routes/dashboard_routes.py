@@ -149,55 +149,56 @@ def get_dashboard_summary(
 
 @router.get("/trends")
 def get_trends(
+    months: int = 3,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Get trends over time.
-    
-    Returns:
-    - Daily active loans (last 30 days)
-    - Daily completions (last 30 days)
-    - Daily defaulters (last 30 days)
+    Get monthly Returns & Interest trends for completed loans (last N months).
     """
+    def _month_start(dt):
+        return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
     now = datetime.utcnow()
-    thirty_days_ago = now - timedelta(days=30)
+    current_month = _month_start(now)
 
-    # Loans by creation date (last 30 days)
-    daily_created = db.query(
-        func.date(Loan.start_date).label("date"),
-        func.count(Loan.id).label("count"),
-    ).filter(
-        Loan.start_date >= thirty_days_ago,
-    ).group_by(
-        func.date(Loan.start_date),
+    months_list = []
+    m = current_month
+    for _ in range(months):
+        months_list.append(m)
+        if m.month == 1:
+            m = m.replace(year=m.year - 1, month=12)
+        else:
+            m = m.replace(month=m.month - 1)
+    months_list = sorted(months_list)
+
+    range_start = months_list[0]
+
+    completed_loans = db.query(Loan).filter(
+        Loan.status == LoanStatus.COMPLETED,
+        Loan.completed_at >= range_start,
     ).all()
 
-    # Loans completed (last 30 days)
-    daily_completed = db.query(
-        func.date(Loan.completed_at).label("date"),
-        func.count(Loan.id).label("count"),
-    ).filter(
-        Loan.completed_at >= thirty_days_ago,
-    ).group_by(
-        func.date(Loan.completed_at),
-    ).all()
+    from collections import defaultdict as _defaultdict
+    monthly = _defaultdict(lambda: {"returns": 0.0, "interest": 0.0})
+    for loan in completed_loans:
+        if not loan.completed_at:
+            continue
+        key = loan.completed_at.strftime("%b %Y")
+        monthly[key]["returns"] += float(loan.total_amount or 0)
+        monthly[key]["interest"] += float((loan.total_amount or 0) - (loan.amount or 0))
 
-    # Defaulters by flagged date (last 30 days)
-    daily_defaulters = db.query(
-        func.date(Loan.defaulter_flagged_date).label("date"),
-        func.count(Loan.id).label("count"),
-    ).filter(
-        Loan.defaulter_flagged_date >= thirty_days_ago,
-    ).group_by(
-        func.date(Loan.defaulter_flagged_date),
-    ).all()
+    result = []
+    for m in months_list:
+        key = m.strftime("%b %Y")
+        data = monthly.get(key, {"returns": 0.0, "interest": 0.0})
+        result.append({
+            "month": key,
+            "returns": round(data["returns"], 2),
+            "interest": round(data["interest"], 2),
+        })
 
-    return {
-        "daily_created": [{"date": str(d[0]), "count": d[1]} for d in daily_created],
-        "daily_completed": [{"date": str(d[0]), "count": d[1]} for d in daily_completed],
-        "daily_defaulters": [{"date": str(d[0]), "count": d[1]} for d in daily_defaulters],
-    }
+    return result
 
 
 @router.get("/defaulters")
