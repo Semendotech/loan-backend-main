@@ -77,16 +77,8 @@ def _log_unmatched_payment(
 
 
 async def send_sms(phone: str, message: str) -> bool:
-    api_key = os.getenv("MOBITECH_API_KEY", "")
-    username = os.getenv("MOBITECH_USERNAME", "")
     sender_id = os.getenv("MOBITECH_SENDER_ID", "FULL_CIRCLE")
 
-    if not api_key:
-        logger.error("MOBITECH_API_KEY not configured")
-        return False
-    if not username:
-        logger.error("MOBITECH_USERNAME not configured")
-        return False
 
     try:
         async with httpx.AsyncClient() as client:
