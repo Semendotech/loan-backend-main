@@ -1,4 +1,4 @@
-"""
+﻿"""
 CORRECTED Dashboard Routes
 - Metrics based on CORRECT definitions of ACTIVE, OVERDUE, DEFAULTERS
 - ACTIVE = Days 1-30 from creation
@@ -16,6 +16,7 @@ from app.database import get_sync_db
 from app.models import Loan, Arrears, Installment, LoanStatus, Customer
 from app.services.loan_service import LoanService
 from app.auth import get_current_user
+from app.utils.pdf_report import render_pdf_report
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -1061,4 +1062,8 @@ def get_cleared_loans_report(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=cleared_loans_report_{suffix}.pdf"},
     )
+
+
+
+
 
