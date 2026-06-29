@@ -108,7 +108,7 @@ class LoanListResponse(BaseModel):
 # ============ ENDPOINTS ============
 
 @router.post("")
-async def create_loan(
+def create_loan(
     loan_data: LoanRequest,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user_sync),
@@ -172,7 +172,7 @@ async def create_loan(
             from app.routes.mpesa_routes import send_sms
             loan_message = f"Loan of KSh {loan_data.amount} approved. Due date: {loan.due_date}. Daily instalment: KSh {loan.total_amount / 30:.2f}. Call 0718016498 for inquiries."
             try:
-                await send_sms(customer.phone, loan_message)
+                asyncio.run(send_sms(customer.phone, loan_message))
             except Exception as sms_err:
                 print(f">>> LOAN SMS FAILED: {sms_err}", flush=True)
 
@@ -393,6 +393,7 @@ def delete_loan(
     db.commit()
 
     return {"message": "Loan deleted successfully"}
+
 
 
 
