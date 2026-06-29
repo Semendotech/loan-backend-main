@@ -1,4 +1,4 @@
-﻿"""
+"""
 CORRECTED Dashboard Routes
 - Metrics based on CORRECT definitions of ACTIVE, OVERDUE, DEFAULTERS
 - ACTIVE = Days 1-30 from creation
@@ -879,7 +879,8 @@ def get_cleared_loans_report(
     """
     from io import BytesIO
     from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo, date as _date, timedelta
+    from zoneinfo import ZoneInfo
+    from datetime import date as _date, timedelta
     from fastapi.responses import StreamingResponse
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import (
