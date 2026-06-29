@@ -266,10 +266,11 @@ async def mpesa_confirmation(
 
         payment_date = now_eat_str("%d/%m/%Y")
         payment_time = now_eat_str("%H:%M")
+        due_date_str = loan.due_date.strftime("%d/%m/%Y") if loan.due_date else "N/A"
         sms_message = (
-            f"Payment received! KSh {amount:.2f} paid to Kodongo Trading Enterprises. "
-            f"Your Outstanding loan balance is KSh {loan.remaining_amount:.2f} "
-            f"on {payment_date} at {payment_time}. "
+            f"KSh {amount:.2f} paid to Kodongo Savings and Credit on {payment_date} at {payment_time}. "
+            f"Your loan balance is KSh {loan.remaining_amount:.2f}. "
+            f"Due date: {due_date_str}. "
             f"For any inquiries call 0718016498."
         )
 
