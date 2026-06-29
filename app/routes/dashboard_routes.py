@@ -298,6 +298,80 @@ def get_defaulters_list(
     }
 
 
+@router.get("/defaulters-report")
+def get_defaulters_report(
+    end_date: str | None = None,
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    PDF report of defaulter loans.
+
+    Definition: ACTIVE loans with is_defaulter == true
+    Mirrors get_defaulters_list's query/fields, rendered as a PDF.
+    """
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from sqlalchemy.orm import selectinload
+
+    report_date = end_date or now_eat().date().isoformat()
+
+    defaulters = db.query(Loan).options(selectinload(Loan.customer)).filter(
+        Loan.is_defaulter == True,
+        Loan.status == LoanStatus.ACTIVE,
+    ).order_by(Loan.defaulter_flagged_date.desc()).all()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("Defaulters Report", styles["Title"]))
+    story.append(Paragraph(f"As of: {report_date}", styles["Normal"]))
+    story.append(Paragraph(f"Total defaulters: {len(defaulters)}", styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    table_data = [["Customer", "Phone", "ID Number", "Loan Balance", "Daily Instalment", "Flagged Date"]]
+    for d in defaulters:
+        customer = d.customer
+        table_data.append([
+            customer.name if customer else "-",
+            customer.phone if customer else "-",
+            customer.id_number if customer else "-",
+            f"{d.remaining_amount:.2f}" if d.remaining_amount is not None else "-",
+            f"{d.daily_instalment:.2f}" if d.daily_instalment is not None else "-",
+            d.defaulter_flagged_date.strftime("%Y-%m-%d") if d.defaulter_flagged_date else "-",
+        ])
+
+    if len(table_data) == 1:
+        story.append(Paragraph("No defaulters found.", styles["Normal"]))
+    else:
+        tbl = Table(table_data, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+        ]))
+        story.append(tbl)
+
+    doc.build(story)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=defaulters_report_{report_date}.pdf"
+        },
+    )
+
+
 # ============ REPORT ENDPOINTS ============
 
 @router.get("/reports/active-loans-summary")
