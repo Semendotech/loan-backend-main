@@ -71,7 +71,7 @@ def get_dashboard_summary(
     now = datetime.utcnow()
     three_months_ago = now - timedelta(days=90)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    week_start = now - timedelta(days=now.weekday())
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Completed loans in last 3 months
