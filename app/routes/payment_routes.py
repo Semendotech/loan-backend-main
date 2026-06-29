@@ -114,6 +114,17 @@ def record_payment(
         print("Recorded By  : " + recorded_by_name, flush=True)
         print("======================================", flush=True)
         print("", flush=True)
+        # Send SMS notification to customer
+        if loan_after and loan_after.customer and loan_after.customer.phone:
+            from app.routes.mpesa_routes import send_sms
+            due_date_str = loan_after.due_date.strftime("%d/%m/%Y") if loan_after.due_date else "N/A"
+            sms_message = f"KSh {payment.amount:.2f} payment recorded on {now}. Balance: KSh {balance_after:.2f}. Due: {due_date_str}. Call 0718016498."
+            try:
+                import asyncio
+                asyncio.run(send_sms(loan_after.customer.phone, sms_message))
+            except Exception as sms_err:
+                print(f">>> MANUAL PAYMENT SMS FAILED: {sms_err}", flush=True)
+
         return PaymentResponse.from_orm(installment)
 
     except Exception as e:
