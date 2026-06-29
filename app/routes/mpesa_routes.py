@@ -97,13 +97,11 @@ async def send_sms(phone: str, message: str) -> bool:
                     "Accept": "application/json",
                 },
                 json={
-                    "api_key": api_key,
-                    "username": username,
-                    "sender_id": sender_id,
+                    "mobile": phone,
+                    "sender_name": sender_id,
                     "message": message,
-                    "phone": phone,
+                    "service_id": 0,
                 },
-            )
             logger.info(f"SMS API Response Status: {response.status_code}")
             print(f">>> SMS API Response Status: {response.status_code}", flush=True)
             logger.info(f"SMS API Response: {response.text}")
@@ -497,5 +495,6 @@ async def simulate_payment():
         result = simulate_response.json()
         logger.info(f"Simulate response: {result}")
         return result
+
 
 
