@@ -78,13 +78,17 @@ def _log_unmatched_payment(
 
 async def send_sms(phone: str, message: str) -> bool:
     sender_id = os.getenv("MOBITECH_SENDER_ID", "FULL_CIRCLE")
-
+    api_key = os.getenv("MOBITECH_API_KEY", "")
+    if not api_key:
+        logger.error("MOBITECH_API_KEY not configured")
+        return False
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://app.mobitechtechnologies.com/sms/sendsms",
                 headers={
+                    "h_api_key": api_key,
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
