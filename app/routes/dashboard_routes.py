@@ -7,6 +7,7 @@ CORRECTED Dashboard Routes
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+import time
 from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -48,10 +49,11 @@ def get_dashboard_metrics(
     """
     # Sync all loans first
 
+    start_time = time.time()
     # Get metrics
     metrics = LoanService.get_loan_dashboard_metrics(db)
-
-    return metrics
+    elapsed = time.time() - start_time
+    print(f">>> DASHBOARD /metrics took {elapsed:.3f}s", flush=True)
 
 
 @router.get("/summary")
@@ -69,6 +71,7 @@ def get_dashboard_summary(
     - Daily/weekly/monthly collection totals
     """
     # Sync all loans
+    start_time = time.time()
 
     now = now_eat()
     three_months_ago = now - timedelta(days=90)
@@ -128,6 +131,9 @@ def get_dashboard_summary(
 
     # Total customers in the system
     total_customers = db.query(func.count(Customer.id)).scalar() or 0
+    elapsed = time.time() - start_time
+    print(f">>> DASHBOARD /summary took {elapsed:.3f}s", flush=True)
+
 
     return {
         # Frontend-expected field names
