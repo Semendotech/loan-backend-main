@@ -92,7 +92,7 @@ async def send_sms(phone: str, message: str) -> bool:
                     "mobile": phone,
                     "sender_name": sender_id,
                     "message": message,
-                    "service_id": 0,
+                    "service_id": "0",
                 },
             )
             logger.info(f"SMS API Response Status: {response.status_code}")
