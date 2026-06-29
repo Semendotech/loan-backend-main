@@ -105,7 +105,9 @@ async def send_sms(phone: str, message: str) -> bool:
                 },
             )
             logger.info(f"SMS API Response Status: {response.status_code}")
+            print(f">>> SMS API Response Status: {response.status_code}", flush=True)
             logger.info(f"SMS API Response: {response.text}")
+            print(f">>> SMS API Response: {response.text}", flush=True)
             if response.status_code in [200, 201]:
                 logger.info(f"SMS sent successfully to {phone}")
                 return True
