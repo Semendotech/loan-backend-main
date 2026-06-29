@@ -103,11 +103,19 @@ async def send_sms(phone: str, message: str) -> bool:
             print(f">>> SMS API Response Status: {response.status_code}", flush=True)
             logger.info(f"SMS API Response: {response.text}")
             print(f">>> SMS API Response: {response.text}", flush=True)
-            if response.status_code in [200, 201]:
-                logger.info(f"SMS sent successfully to {phone}")
-                return True
-            else:
-                logger.error(f"SMS send failed: {response.text}")
+            # Check Mobitech status_code in JSON response
+            try:
+                response_json = response.json()
+                status_code = response_json.get("status_code")
+                if status_code == "1000":
+                    logger.info(f"SMS sent successfully to {phone}")
+                    return True
+                else:
+                    status_desc = response_json.get("status_desc", "Unknown error")
+                    logger.error(f"SMS send failed: {status_desc} (code: {status_code})")
+                    return False
+            except Exception as json_err:
+                logger.error(f"Failed to parse SMS response JSON: {json_err}")
                 return False
     except Exception as e:
         logger.error(f"SMS send exception: {e}")
@@ -492,6 +500,7 @@ async def simulate_payment():
         result = simulate_response.json()
         logger.info(f"Simulate response: {result}")
         return result
+
 
 
 
