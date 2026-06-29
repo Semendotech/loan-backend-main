@@ -1,5 +1,6 @@
 ﻿import os
 from datetime import datetime
+from app.utils.timezone import now_eat
 from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks
 
 from app.database import SyncSessionLocal
@@ -21,12 +22,12 @@ def verify_sync_key(x_sync_key: str = Header(default=None)):
 
 def _run_sync_job():
     _sync_status["running"] = True
-    _sync_status["last_started"] = datetime.utcnow().isoformat()
+    _sync_status["last_started"] = now_eat().isoformat()
     _sync_status["last_error"] = None
     db = SyncSessionLocal()
     try:
         LoanService.daily_sync_all_loans(db)
-        _sync_status["last_finished"] = datetime.utcnow().isoformat()
+        _sync_status["last_finished"] = now_eat().isoformat()
     except Exception as e:
         _sync_status["last_error"] = f"{type(e).__name__}: {e}"
         db.rollback()

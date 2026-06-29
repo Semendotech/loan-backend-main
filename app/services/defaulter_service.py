@@ -6,6 +6,7 @@ CORRECTED Defaulter Service
 """
 
 from datetime import datetime, timedelta
+from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -42,7 +43,7 @@ class DefaulterService:
         required_5_day_amount = daily_instalment * 5
 
         # Get payments from last 5 days
-        five_days_ago = datetime.utcnow() - timedelta(days=5)
+        five_days_ago = now_eat() - timedelta(days=5)
 
         total_paid_5_days = db.query(func.sum(Installment.amount)).filter(
             Installment.loan_id == loan_id,
@@ -78,7 +79,7 @@ class DefaulterService:
         required_5_day = daily_instalment * 5
         
         # Get last 5 days of payments
-        five_days_ago = datetime.utcnow() - timedelta(days=5)
+        five_days_ago = now_eat() - timedelta(days=5)
         
         payments = db.query(Installment).filter(
             Installment.loan_id == loan_id,
@@ -98,7 +99,7 @@ class DefaulterService:
         # Build day breakdown
         days_breakdown = []
         for i in range(5):
-            check_date = (datetime.utcnow() - timedelta(days=4-i)).date()
+            check_date = (now_eat() - timedelta(days=4-i)).date()
             amount = by_date.get(check_date, 0)
             days_breakdown.append({
                 "date": str(check_date),
@@ -160,7 +161,7 @@ class DefaulterService:
         window = DefaulterService.get_5_day_payment_window(db, loan_id)
 
         # Recent payments (last 10 days)
-        ten_days_ago = datetime.utcnow() - timedelta(days=10)
+        ten_days_ago = now_eat() - timedelta(days=10)
         recent_payments = db.query(Installment).filter(
             Installment.loan_id == loan_id,
             Installment.payment_date >= ten_days_ago,

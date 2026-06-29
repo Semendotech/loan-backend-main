@@ -7,6 +7,7 @@ CORRECTED Dashboard Routes
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
@@ -68,7 +69,7 @@ def get_dashboard_summary(
     """
     # Sync all loans
 
-    now = datetime.utcnow()
+    now = now_eat()
     three_months_ago = now - timedelta(days=90)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -159,7 +160,7 @@ def get_trends(
     def _month_start(dt):
         return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    now = datetime.utcnow()
+    now = now_eat()
     current_month = _month_start(now)
 
     months_list = []
@@ -227,11 +228,11 @@ def get_defaulters_list(
     defaulters = query.order_by(Loan.defaulter_flagged_date.desc()).limit(limit).offset(offset).all()
 
     from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo, timedelta as _td
+    from datetime import timedelta as _td
     from app.models import Installment as _Installment
     from collections import defaultdict as _defaultdict
 
-    today = _dt.utcnow().date()
+    today = now_eat().date()
     loan_ids = [d.id for d in defaulters]
     all_installments = db.query(_Installment).filter(
         _Installment.loan_id.in_(loan_ids),
@@ -370,7 +371,7 @@ def overdue_report(
                 "original_amount": a.original_amount,
                 "remaining_amount": a.remaining_amount,
                 "arrears_date": a.arrears_date,
-                "days_overdue": (datetime.utcnow() - a.arrears_date).days,
+                "days_overdue": (now_eat() - a.arrears_date).days,
             }
             for a in overdue_arrears
         ],

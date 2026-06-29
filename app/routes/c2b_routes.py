@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Request
+from app.utils.timezone import now_eat
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -128,7 +129,7 @@ async def mpesa_validation(request: Request):
 
 @router.post("/confirmation")
 async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db)):
-    timestamp = datetime.utcnow()
+    timestamp = now_eat()
 
     try:
         body = await request.json()
@@ -229,7 +230,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
         installment = models.Installment(
             loan_id=loan.id,
             amount=amount,
-            payment_date=datetime.utcnow(),
+            payment_date=now_eat(),
             recorded_by="System",
             source="daraja",
         )
@@ -239,7 +240,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
 
         if loan.remaining_amount <= 0:
             loan.status = models.LoanStatus.COMPLETED
-            loan.completed_at = datetime.utcnow()
+            loan.completed_at = now_eat()
 
         mpesa_tx = models.MpesaTransaction(
             trans_id=trans_id,

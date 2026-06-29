@@ -7,6 +7,7 @@ CORRECTED Loan Service - Core Business Logic
 """
 
 from datetime import datetime, timedelta, date
+from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select as sa_select
@@ -75,7 +76,7 @@ class LoanService:
 
         if loan.status != expected_status:
             loan.status = expected_status
-            loan.updated_at = datetime.utcnow()
+            loan.updated_at = now_eat()
             status_changed = True
 
         # If transitioning to OVERDUE, create Arrears record
@@ -86,9 +87,9 @@ class LoanService:
         if expected_status == LoanStatus.COMPLETED:
             if loan.arrears:
                 loan.arrears.is_cleared = True
-                loan.arrears.cleared_date = datetime.utcnow()
+                loan.arrears.cleared_date = now_eat()
                 loan.arrears.remaining_amount = 0
-            loan.completed_at = datetime.utcnow()
+            loan.completed_at = now_eat()
 
         db.commit()
         return status_changed
@@ -114,7 +115,7 @@ class LoanService:
             original_amount=loan.remaining_amount,
             remaining_amount=loan.remaining_amount,
             is_cleared=False,
-            arrears_date=datetime.utcnow(),
+            arrears_date=now_eat(),
         )
         db.add(arrears)
         db.commit()
@@ -129,7 +130,7 @@ class LoanService:
         """
         if loan.arrears:
             loan.arrears.remaining_amount = loan.remaining_amount
-            loan.arrears.updated_at = datetime.utcnow()
+            loan.arrears.updated_at = now_eat()
             db.commit()
 
     @staticmethod
@@ -150,17 +151,17 @@ class LoanService:
         if not loan.is_active_period:
             return False
 
-        today = datetime.utcnow().date()
+        today = now_eat().date()
         daily_instalment = loan.daily_instalment
         required_5_day_amount = daily_instalment * 5
 
         # Check last 5 consecutive days
-        five_days_ago = datetime.utcnow() - timedelta(days=5)
+        five_days_ago = now_eat() - timedelta(days=5)
 
         payments_last_5_days = db.query(func.sum(Installment.amount)).filter(
             Installment.loan_id == loan_id,
             Installment.payment_date >= five_days_ago,
-            Installment.payment_date <= datetime.utcnow(),
+            Installment.payment_date <= now_eat(),
         ).scalar()
 
         actual_amount = payments_last_5_days or 0
@@ -170,7 +171,7 @@ class LoanService:
         # Update loan if status changed
         if is_defaulter and not loan.is_defaulter:
             loan.is_defaulter = True
-            loan.defaulter_flagged_date = datetime.utcnow()
+            loan.defaulter_flagged_date = now_eat()
 
             # Log the flag
             flag_record = DefaulterFlag(
@@ -232,7 +233,7 @@ class LoanService:
         installment = Installment(
             loan_id=loan_id,
             amount=amount,
-            payment_date=datetime.utcnow(),
+            payment_date=now_eat(),
             payment_method=payment_method,
             reference_number=reference,
             recorded_by=recorded_by,
@@ -240,7 +241,7 @@ class LoanService:
         )
         db.add(installment)
 
-        loan.updated_at = datetime.utcnow()
+        loan.updated_at = now_eat()
 
         # Sync arrears balance
         LoanService.sync_arrears_balance(db, loan)
@@ -489,7 +490,7 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
 
     if loan.status != expected_status:
         loan.status = expected_status
-        loan.updated_at = datetime.utcnow()
+        loan.updated_at = now_eat()
         status_changed = True
 
     if expected_status == LoanStatus.OVERDUE and not loan.arrears:
@@ -506,15 +507,15 @@ async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
             original_amount=loan.remaining_amount,
             remaining_amount=loan.remaining_amount,
             is_cleared=False,
-            arrears_date=datetime.utcnow(),
+            arrears_date=now_eat(),
         )
         db.add(arrears)
 
     if expected_status == LoanStatus.COMPLETED and loan.arrears:
         loan.arrears.is_cleared = True
-        loan.arrears.cleared_date = datetime.utcnow()
+        loan.arrears.cleared_date = now_eat()
         loan.arrears.remaining_amount = 0
-        loan.completed_at = datetime.utcnow()
+        loan.completed_at = now_eat()
 
     if status_changed or expected_status == LoanStatus.OVERDUE:
         await db.commit()

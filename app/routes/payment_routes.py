@@ -6,6 +6,7 @@ CORRECTED Payment Routes
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
 from datetime import datetime
 from pydantic import BaseModel
@@ -238,7 +239,7 @@ def update_installment(
         if field in update_data:
             setattr(installment, field, update_data[field])
 
-    loan.updated_at = datetime.utcnow()
+    loan.updated_at = now_eat()
     db.commit()
 
     # Sync balances
@@ -272,7 +273,7 @@ def delete_installment(
     loan.remaining_amount += installment.amount  # Restore the amount
 
     db.delete(installment)
-    loan.updated_at = datetime.utcnow()
+    loan.updated_at = now_eat()
     db.commit()
 
     # Sync balances

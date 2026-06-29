@@ -5,6 +5,7 @@ CORRECTED Arrears Routes
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
 from datetime import datetime
 from pydantic import BaseModel
@@ -173,14 +174,14 @@ def clear_arrears(
         raise HTTPException(status_code=400, detail="Arrears already cleared")
 
     arrears.is_cleared = True
-    arrears.cleared_date = datetime.utcnow()
+    arrears.cleared_date = now_eat()
     arrears.remaining_amount = 0
 
     # Update associated loan
     loan = arrears.loan
     loan.status = LoanStatus.COMPLETED
     loan.remaining_amount = 0
-    loan.completed_at = datetime.utcnow()
+    loan.completed_at = now_eat()
 
     db.commit()
     db.refresh(arrears)

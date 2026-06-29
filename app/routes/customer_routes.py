@@ -1,5 +1,6 @@
 ﻿import re
 from urllib.parse import urlparse
+from app.utils.timezone import now_eat
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -794,7 +795,7 @@ async def get_customer_statement_pdf(
 
     header_right = Table(
         [[Paragraph("LOAN ACCOUNT STATEMENT", doc_title_style)],
-         [Paragraph(f"Generated: {_dt.utcnow().strftime('%d %b %Y, %H:%M')} UTC", doc_sub_style)]],
+         [Paragraph(f"Generated: {now_eat().strftime('%d %b %Y, %H:%M')} EAT", doc_sub_style)]],
         colWidths=[None],
     )
     header_right.setStyle(TableStyle([
@@ -967,7 +968,7 @@ async def get_customer_statement_pdf(
     story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
     story.append(Paragraph(
         f"This statement was generated electronically on "
-        f"{_dt.utcnow().strftime('%d %B %Y at %H:%M UTC')} "
+        f"{now_eat().strftime('%d %B %Y at %H:%M EAT')} "
         f"and is valid without a signature. For queries contact KODONGO SAVINGS & CREDIT.",
         footer_style,
     ))

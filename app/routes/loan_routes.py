@@ -6,6 +6,7 @@ CORRECTED Loan Routes
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from typing import Optional
@@ -349,7 +350,7 @@ def update_loan(
         if field in update_data:
             setattr(loan, field, update_data[field])
 
-    loan.updated_at = datetime.utcnow()
+    loan.updated_at = now_eat()
     db.commit()
     db.refresh(loan)
 
