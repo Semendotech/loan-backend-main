@@ -5,6 +5,7 @@ CORRECTED Loan Routes
 - Integrated with LoanService for proper status sync
 """
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.utils.timezone import now_eat
 from sqlalchemy.orm import Session
@@ -107,7 +108,7 @@ class LoanListResponse(BaseModel):
 # ============ ENDPOINTS ============
 
 @router.post("")
-def create_loan(
+async def create_loan(
     loan_data: LoanRequest,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user_sync),
@@ -166,6 +167,15 @@ def create_loan(
             interest_rate=20.0,
             start_date=start_date,
         )
+        # Send SMS notification to customer
+        if customer and customer.phone:
+            from app.routes.mpesa_routes import send_sms
+            loan_message = f"Loan of KSh {loan_data.amount} approved. Due date: {loan.due_date}. Daily instalment: KSh {loan.total_amount / 30:.2f}. Call 0718016498 for inquiries."
+            try:
+                await send_sms(customer.phone, loan_message)
+            except Exception as sms_err:
+                print(f">>> LOAN SMS FAILED: {sms_err}", flush=True)
+
         return LoanResponse.from_orm(loan)
     except HTTPException:
         raise
