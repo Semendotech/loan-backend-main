@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -13,6 +14,15 @@ from app import models
 from app.utils import hash_password
 from app.routes import auth_routes, customer_routes, loan_routes, dashboard_routes, payment_routes, arrears_routes, mpesa_routes, admin_routes
 from app.routes.user_routes import router as user_routes
+
+# Configure logging to output to stdout at INFO level
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
 
 app = FastAPI(title="Loan Management System")
 

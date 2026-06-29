@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from app.utils.timezone import now_eat
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -275,12 +275,21 @@ async def mpesa_confirmation(
         )
 
         if customer.phone:
-            sms_sent = await send_sms(customer.phone, sms_message)
+            print(f">>> ATTEMPTING SMS to {customer.phone}", flush=True)
+            try:
+                sms_sent = await send_sms(customer.phone, sms_message)
+                print(f">>> SMS RESULT: {sms_sent}", flush=True)
+            except Exception as sms_err:
+                import traceback
+                print(f">>> SMS EXCEPTION: {sms_err}", flush=True)
+                print(traceback.format_exc(), flush=True)
+                sms_sent = False
             if sms_sent:
                 logger.debug("SMS sent to %s", customer.phone)
             else:
                 logger.warning(f"SMS failed for {customer.phone}, but payment was recorded")
         else:
+            print(f">>> NO PHONE for customer {customer.name}", flush=True)
             logger.warning(f"No phone number for customer {customer.name}, skipping SMS")
 
         return {"ResultCode": 0, "ResultDesc": "Payment confirmed and recorded"}
