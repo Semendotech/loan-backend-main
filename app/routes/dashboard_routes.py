@@ -546,6 +546,8 @@ def overdue_report(
 
 @router.get("/overdue-report")
 def get_overdue_report(
+    start_date: str | None = None,
+    end_date: str | None = None,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -566,11 +568,16 @@ def get_overdue_report(
     from reportlab.lib.enums import TA_RIGHT, TA_CENTER
     from sqlalchemy.orm import selectinload
 
+    range_label = f"{start_date} to {end_date}" if (start_date and end_date) else (f"From {start_date}" if start_date else (f"Up to {end_date}" if end_date else report_date))
     report_date = now_eat().date().isoformat()
-
-    overdue_arrears = db.query(Arrears).options(selectinload(Arrears.customer)).filter(
+    query = db.query(Arrears).options(selectinload(Arrears.customer)).filter(
         Arrears.is_cleared == False,
-    ).order_by(Arrears.arrears_date.desc()).all()
+    )
+    if start_date:
+        query = query.filter(Arrears.arrears_date >= _dt.strptime(start_date, "%Y-%m-%d").date())
+    if end_date:
+        query = query.filter(Arrears.arrears_date <= _dt.strptime(end_date, "%Y-%m-%d").date())
+    overdue_arrears = query.order_by(Arrears.arrears_date.desc()).all()
 
     total_outstanding = sum(float(a.remaining_amount or 0) for a in overdue_arrears)
 
@@ -609,7 +616,7 @@ def get_overdue_report(
     ]))
     right_tbl = Table(
         [[Paragraph("OVERDUE LOANS REPORT", rt_style)],
-         [Paragraph(f"As of: {report_date}", rs_style)],
+         [Paragraph(f"As of: {range_label}", rs_style)],
          [Paragraph(f"Generated: {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %b %Y, %H:%M')} EAT", rs_style)]],
         colWidths=[None],
     )
