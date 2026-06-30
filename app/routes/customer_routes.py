@@ -1,4 +1,4 @@
-﻿import re
+import re
 from urllib.parse import urlparse
 from app.utils.timezone import now_eat
 from zoneinfo import ZoneInfo
@@ -127,7 +127,7 @@ async def list_customers(
     """List customers with basic info (paginated, with optional search)"""
     base_stmt = select(Customer)
     
-    # ðŸ” FILTER FIRST if search query provided
+    # 🔍 FILTER FIRST if search query provided
     if q:
         q = q.strip()
         base_stmt = base_stmt.where(
@@ -153,7 +153,7 @@ async def list_customers(
     total_result = await db.execute(count_stmt)
     total_count = total_result.scalar_one()
 
-    # ðŸ“„ THEN paginate
+    # 📄 THEN paginate
     stmt = base_stmt.order_by(Customer.created_at.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
     customers = result.scalars().all()
@@ -210,10 +210,10 @@ async def get_customer_by_id_number(
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
-    # ðŸ”¹ Filter only active (and overdue) loans with guarantor relationship loaded
+    # 🔹 Filter only active (and overdue) loans with guarantor relationship loaded
     loans_result = await db.execute(
         select(Loan)
-        .options(selectinload(Loan.guarantor), selectinload(Loan.installments))
+        .options(selectinload(Loan.guarantor), selectinload(Loan.installments), selectinload(Loan.arrears))
         .filter(
             Loan.customer_id == customer.id_number,  # customer_id stores id_number
             Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS])
@@ -261,7 +261,7 @@ async def get_customer_by_id(
     # Get customer loans with guarantor relationship loaded
     loans_result = await db.execute(
         select(Loan)
-        .options(selectinload(Loan.guarantor), selectinload(Loan.installments))
+        .options(selectinload(Loan.guarantor), selectinload(Loan.installments), selectinload(Loan.arrears))
         .filter(Loan.customer_id == customer.id_number)
     )
     loans = loans_result.scalars().all()
@@ -342,7 +342,7 @@ async def check_customer_eligibility(
         result = await db.execute(select(Customer).filter(Customer.id_number == request.id_number))
         customer = result.scalar_one_or_none()
 
-    # If not found â€” just return False values (not an error)
+    # If not found — just return False values (not an error)
     if not customer:
         return {
             "exists": False,
@@ -484,7 +484,7 @@ async def search_customers(
     return result.scalars().all()
 
 
-# ðŸ†• Additional endpoints (unchanged from original)
+# 🆕 Additional endpoints (unchanged from original)
 # (Keeping the same delete, report, and statement endpoints)
 
 @router.get("/{customer_id}/installments")
