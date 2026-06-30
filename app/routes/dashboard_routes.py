@@ -54,6 +54,7 @@ def get_dashboard_metrics(
     metrics = LoanService.get_loan_dashboard_metrics(db)
     elapsed = time.time() - start_time
     print(f">>> DASHBOARD /metrics took {elapsed:.3f}s", flush=True)
+    return metrics
 
 
 @router.get("/summary")
