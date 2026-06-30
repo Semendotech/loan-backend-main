@@ -309,13 +309,15 @@ async def mpesa_confirmation(
 
 
 @router.get("/unmatched-payments")
-async def get_unmatched_payments(db: AsyncSession = Depends(get_db)):
+async def get_unmatched_payments(date: str | None = None, db: AsyncSession = Depends(get_db)):
     """Return all MpesaTransactions where loan_id is NULL (unmatched payments)."""
-    result = await db.execute(
-        select(models.MpesaTransaction)
-        .where(models.MpesaTransaction.loan_id == None)
-        .order_by(models.MpesaTransaction.created_at.desc())
-    )
+    query = select(models.MpesaTransaction).where(models.MpesaTransaction.loan_id == None)
+    if date:
+        from datetime import datetime as _dt, timedelta as _td
+        day_start = _dt.strptime(date, "%Y-%m-%d")
+        day_end = day_start + _td(days=1)
+        query = query.where(models.MpesaTransaction.created_at >= day_start, models.MpesaTransaction.created_at < day_end)
+    result = await db.execute(query.order_by(models.MpesaTransaction.created_at.desc()))
     transactions = result.scalars().all()
     return [
         {
@@ -331,7 +333,7 @@ async def get_unmatched_payments(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/unmatched-payments-pdf")
-async def get_unmatched_payments_pdf(db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def get_unmatched_payments_pdf(date: str | None = None, db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user)):
     from io import BytesIO
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo
@@ -345,12 +347,13 @@ async def get_unmatched_payments_pdf(db: AsyncSession = Depends(get_db), current
 
     EAT = ZoneInfo("Africa/Nairobi")
     now_eat = _dt.now(EAT).strftime("%d %b %Y, %H:%M")
-
-    result = await db.execute(
-        select(models.MpesaTransaction)
-        .where(models.MpesaTransaction.loan_id == None)
-        .order_by(models.MpesaTransaction.created_at.desc())
-    )
+    query = select(models.MpesaTransaction).where(models.MpesaTransaction.loan_id == None)
+    if date:
+        from datetime import timedelta as _td
+        day_start = _dt.strptime(date, "%Y-%m-%d")
+        day_end = day_start + _td(days=1)
+        query = query.where(models.MpesaTransaction.created_at >= day_start, models.MpesaTransaction.created_at < day_end)
+    result = await db.execute(query.order_by(models.MpesaTransaction.created_at.desc()))
     transactions = result.scalars().all()
     total = sum(float(tx.amount or 0) for tx in transactions)
 
@@ -375,7 +378,8 @@ async def get_unmatched_payments_pdf(db: AsyncSession = Depends(get_db), current
     story = []
     left_tbl = Table([[Paragraph("KODONGO SAVINGS & CREDIT", inst_style)],[Paragraph("Trusted Financial Solutions", tag_style)]], colWidths=[None])
     left_tbl.setStyle(TableStyle([("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
-    right_tbl = Table([[Paragraph("UNMATCHED PAYMENTS", rt_style)],[Paragraph(f"Generated: {now_eat} EAT", rs_style)]], colWidths=[None])
+    date_label = f"For: {date}" if date else "All dates"
+    right_tbl = Table([[Paragraph("UNMATCHED PAYMENTS", rt_style)],[Paragraph(date_label, rs_style)],[Paragraph(f"Generated: {now_eat} EAT", rs_style)]], colWidths=[None])
     right_tbl.setStyle(TableStyle([("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
     hdr = Table([[left_tbl, right_tbl]], colWidths=["60%","40%"])
     hdr.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0)]))
@@ -417,7 +421,8 @@ async def get_unmatched_payments_pdf(db: AsyncSession = Depends(get_db), current
     story.append(Paragraph(f"Generated on {now_eat} EAT. Kodongo Savings & Credit.", ftr_style))
     doc.build(story)
     buffer.seek(0)
-    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=unmatched_payments_{_dt.now(EAT).strftime('%Y-%m-%d')}.pdf"})
+    filename_date = date if date else _dt.now(EAT).strftime('%Y-%m-%d')
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=unmatched_payments_{filename_date}.pdf"})
 
 
 @router.post("/register-urls")
