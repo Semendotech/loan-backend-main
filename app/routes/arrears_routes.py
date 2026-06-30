@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.database import get_sync_db
-from app.models import Arrears, Loan, LoanStatus, Installment
+from app.models import Arrears, Loan, LoanStatus, Installment, Customer
 from app.services.loan_service import LoanService
 from app.auth import get_current_user
 
@@ -54,6 +54,7 @@ class ArrearsListResponse(BaseModel):
 @router.get("", response_model=ArrearsListResponse)
 def get_arrears(
     only_active: bool = Query(True),
+    q: Optional[str] = Query(None, description="Search by customer name, phone, or ID number"),
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_sync_db),
@@ -73,10 +74,22 @@ def get_arrears(
     """
     # Note: full sync is handled by the scheduled /admin/sync job, not on every page load
     from sqlalchemy.orm import selectinload
+    from sqlalchemy import or_
+
     query = db.query(Arrears).options(selectinload(Arrears.customer))
 
     if only_active:
         query = query.filter(Arrears.is_cleared == False)
+
+    if q:
+        search = f"%{q.strip()}%"
+        query = query.join(Customer, Arrears.customer_id == Customer.id).filter(
+            or_(
+                Customer.name.ilike(search),
+                Customer.phone.ilike(search),
+                Customer.id_number.ilike(search),
+            )
+        )
 
     total = query.count()
     arrears_records = query.order_by(Arrears.arrears_date.desc()).limit(limit).offset(offset).all()
@@ -224,5 +237,6 @@ def get_customer_arrears(
         "limit": limit,
         "offset": offset,
     }
+
 
 

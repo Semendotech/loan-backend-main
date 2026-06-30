@@ -382,54 +382,47 @@ class LoanService:
         return loans, total
 
     @staticmethod
+    @staticmethod
     def get_loan_dashboard_metrics(db: Session) -> dict:
-        """
-        Get dashboard metrics based on correct definitions.
+        """Get dashboard metrics efficiently using combined queries."""
+        import time
+        start = time.time()
         
-        Returns:
-        {
-            "active_loans": count of ACTIVE loans,
-            "active_loans_outstanding": sum of remaining for ACTIVE loans,
-            "overdue_loans": count of OVERDUE loans (or Arrears.is_cleared == false),
-            "overdue_outstanding": sum of remaining for OVERDUE loans,
-            "defaulters": count of is_defaulter == true,
-            "completed_loans": count of COMPLETED loans,
-            "total_cleared_amount": sum of completed loan total_amounts,
-        }
-        """
-        # ACTIVE loans
-        active_loans_count = db.query(func.count(Loan.id)).filter(
-            Loan.status == LoanStatus.ACTIVE
-        ).scalar()
-
-        active_loans_outstanding = db.query(func.sum(Loan.remaining_amount)).filter(
-            Loan.status == LoanStatus.ACTIVE
-        ).scalar() or 0
-
-        # OVERDUE loans (same as Arrears with is_cleared = false)
-        overdue_loans_count = db.query(func.count(Arrears.id)).filter(
-            Arrears.is_cleared == False
-        ).scalar()
-
-        overdue_outstanding = db.query(func.sum(Arrears.remaining_amount)).filter(
-            Arrears.is_cleared == False
-        ).scalar() or 0
-
-        # DEFAULTERS (subset of ACTIVE)
-        defaulters_count = db.query(func.count(Loan.id)).filter(
-            Loan.is_defaulter == True,
-            Loan.status == LoanStatus.ACTIVE,
-        ).scalar()
-
-        # COMPLETED loans
-        completed_count = db.query(func.count(Loan.id)).filter(
-            Loan.status == LoanStatus.COMPLETED
-        ).scalar()
-
-        completed_outstanding = db.query(func.sum(Loan.total_amount)).filter(
-            Loan.status == LoanStatus.COMPLETED
-        ).scalar() or 0
-
+        # Query 1: ACTIVE loans
+        active_result = db.query(
+            func.count(Loan.id).label("count"),
+            func.sum(Loan.remaining_amount).label("sum")
+        ).filter(Loan.status == LoanStatus.ACTIVE).first()
+        
+        active_loans_count = active_result.count or 0
+        active_loans_outstanding = float(active_result.sum) if active_result.sum else 0.0
+        
+        # Query 2: OVERDUE loans
+        overdue_result = db.query(
+            func.count(Arrears.id).label("count"),
+            func.sum(Arrears.remaining_amount).label("sum")
+        ).filter(Arrears.is_cleared == False).first()
+        
+        overdue_loans_count = overdue_result.count or 0
+        overdue_outstanding = float(overdue_result.sum) if overdue_result.sum else 0.0
+        
+        # Query 3: DEFAULTERS and COMPLETED
+        defaulters_result = db.query(func.count(Loan.id).label("count")).filter(
+            Loan.is_defaulter == True, Loan.status == LoanStatus.ACTIVE
+        ).first()
+        
+        completed_result = db.query(
+            func.count(Loan.id).label("count"),
+            func.sum(Loan.total_amount).label("sum")
+        ).filter(Loan.status == LoanStatus.COMPLETED).first()
+        
+        defaulters_count = defaulters_result.count or 0
+        completed_count = completed_result.count or 0
+        completed_outstanding = float(completed_result.sum) if completed_result.sum else 0.0
+        
+        elapsed = time.time() - start
+        print(f">>> DASHBOARD METRICS took {elapsed:.3f}s", flush=True)
+        
         return {
             "active_loans": active_loans_count,
             "active_loans_outstanding": active_loans_outstanding,
@@ -441,93 +434,129 @@ class LoanService:
         }
 
 
-
-# ============ STANDALONE HELPERS (used by customer_routes.py) ============
-
-def compute_weekly_progress(loan: Loan) -> dict:
+def compute_weekly_progress(loan, reference_date=None):
     """
-    Compute weekly repayment progress for a loan based on the 30-day cycle.
-    daily_instalment = total_amount / 30
-    weekly_due_amount = daily_instalment * 7
-    arrears_amount = max(expected_cumulative - paid_cumulative, 0)
+    Calculate how much should have been paid for the current week-based schedule
+    and the arrears accumulated so far.
     """
-    daily_instalment = loan.daily_instalment
-    days_elapsed = max(loan.days_since_start, 0)
-    days_for_schedule = min(days_elapsed, 30)
+    TOTAL_WEEKS = 4
 
-    expected_cumulative = daily_instalment * days_for_schedule
-    paid_cumulative = sum((inst.amount for inst in (loan.installments or [])), 0.0)
+    total_amount = float(loan.total_amount) if loan.total_amount is not None else 0.0
+    remaining_amount = float(loan.remaining_amount) if loan.remaining_amount is not None else total_amount
+    actual_paid = total_amount - remaining_amount
 
-    arrears_amount = max(expected_cumulative - paid_cumulative, 0.0)
-    week_number = (days_for_schedule // 7) + 1 if days_for_schedule > 0 else 1
+    if not loan.start_date:
+        return {
+            "weekly_due_amount": 0.0,
+            "weeks_elapsed": 0,
+            "expected_paid": 0.0,
+            "actual_paid": actual_paid,
+            "arrears_amount": 0.0,
+        }
+
+    ref_date = reference_date or now_eat().date()
+    start_date = loan.start_date
+    if hasattr(start_date, "date"):
+        start_date = start_date.date()
+
+    weekly_due_amount = round(total_amount / TOTAL_WEEKS, 2)
+
+    days_elapsed = (ref_date - start_date).days
+    weeks_elapsed = 0
+    if days_elapsed >= 0:
+        weeks_elapsed = min(TOTAL_WEEKS, (days_elapsed // 7) + 1)
+
+    expected_paid = weekly_due_amount * weeks_elapsed
+    arrears_amount = max(0.0, round(expected_paid - actual_paid, 2))
 
     return {
-        "week_number": min(week_number, 5),
-        "days_elapsed": days_elapsed,
-        "weekly_due_amount": round(daily_instalment * 7, 2),
-        "expected_cumulative": round(expected_cumulative, 2),
-        "paid_cumulative": round(paid_cumulative, 2),
-        "arrears_amount": round(arrears_amount, 2),
+        "weekly_due_amount": weekly_due_amount,
+        "weeks_elapsed": weeks_elapsed,
+        "expected_paid": round(expected_paid, 2),
+        "actual_paid": round(actual_paid, 2),
+        "arrears_amount": arrears_amount,
     }
 
 
-def loan_is_overdue_by_schedule(loan: Loan) -> bool:
+def loan_is_overdue_by_schedule(loan, reference_date=None):
     """
-    Returns True if the loan has fallen behind its expected payment
-    schedule, regardless of whether `status` has been synced yet.
+    Determine if a loan is overdue based on its due_date, independent of
+    whatever status is currently persisted on the row.
     """
-    progress = compute_weekly_progress(loan)
-    return progress["arrears_amount"] > 0 and loan.days_since_start >= 1
+    ref_date = reference_date or now_eat().date()
+    if not loan.due_date:
+        return False
+
+    due_date = loan.due_date
+    if hasattr(due_date, "date"):
+        due_date = due_date.date()
+
+    remaining_amount = loan.remaining_amount
+    if remaining_amount is None:
+        remaining_amount = loan.total_amount or 0.0
+
+    return due_date < ref_date and float(remaining_amount) > 0
 
 
-async def sync_overdue_state(db: AsyncSession, loan: Loan) -> bool:
+async def sync_overdue_state(db: AsyncSession, loan) -> bool:
     """
-    Async equivalent of LoanService.sync_loan_status, for use with AsyncSession.
-    Returns True if the loan's status changed.
+    Ensure the loan status/arrears record reflects whether it is overdue.
+    Returns True if any mutation occurred.
     """
-    expected_status = loan.status_should_be
-    status_changed = False
+    from sqlalchemy.orm import selectinload
 
-    if loan.status != expected_status:
-        loan.status = expected_status
-        loan.updated_at = now_eat()
-        status_changed = True
+    ref_date = now_eat().date()
+    remaining_amount = loan.remaining_amount
+    if remaining_amount is None:
+        remaining_amount = loan.total_amount or 0.0
+    remaining_amount = float(remaining_amount)
 
-    if expected_status == LoanStatus.OVERDUE and not loan.arrears:
-        from app.models import Customer
-        from sqlalchemy import select as sa_select_local
-        cust_result = await db.execute(sa_select_local(Customer).filter(Customer.id_number == loan.customer_id))
-        customer = cust_result.scalar_one_or_none()
-        if not customer:
-            raise ValueError(f"Customer with id_number {loan.customer_id!r} not found for loan {loan.id}")
+    changed = False
+    is_overdue = loan_is_overdue_by_schedule(loan, ref_date)
 
-        arrears = Arrears(
-            loan_id=loan.id,
-            customer_id=customer.id,
-            original_amount=loan.remaining_amount,
-            remaining_amount=loan.remaining_amount,
-            is_cleared=False,
-            arrears_date=now_eat(),
-        )
-        db.add(arrears)
+    if is_overdue:
+        if loan.status != LoanStatus.OVERDUE:
+            loan.status = LoanStatus.OVERDUE
+            loan.updated_at = now_eat()
+            changed = True
 
-    if expected_status == LoanStatus.COMPLETED and loan.arrears:
-        loan.arrears.is_cleared = True
-        loan.arrears.cleared_date = now_eat()
-        loan.arrears.remaining_amount = 0
-        loan.completed_at = now_eat()
+        result = await db.execute(sa_select(Arrears).filter(Arrears.loan_id == loan.id))
+        arrears = result.scalar_one_or_none()
 
-    if status_changed or expected_status == LoanStatus.OVERDUE:
+        if not arrears:
+            arrears = Arrears(
+                loan_id=loan.id,
+                customer_id=loan.customer_id,
+                original_amount=loan.total_amount,
+                remaining_amount=remaining_amount,
+                is_cleared=False,
+                arrears_date=now_eat(),
+            )
+            db.add(arrears)
+            changed = True
+        else:
+            if abs((arrears.remaining_amount or 0.0) - remaining_amount) > 0.01:
+                arrears.remaining_amount = remaining_amount
+                changed = True
+            if arrears.is_cleared:
+                arrears.is_cleared = False
+                arrears.cleared_date = None
+                changed = True
+    else:
+        if loan.status == LoanStatus.OVERDUE and remaining_amount <= 0:
+            loan.status = LoanStatus.COMPLETED
+            loan.completed_at = now_eat()
+            changed = True
+
+        result = await db.execute(sa_select(Arrears).filter(Arrears.loan_id == loan.id))
+        arrears = result.scalar_one_or_none()
+        if arrears and not arrears.is_cleared and remaining_amount <= 0:
+            arrears.remaining_amount = 0.0
+            arrears.is_cleared = True
+            arrears.cleared_date = now_eat()
+            changed = True
+
+    if changed:
         await db.commit()
 
-    return status_changed
-
-
-
-
-
-
-
-
-
-
+    return changed
