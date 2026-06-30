@@ -544,6 +544,160 @@ def overdue_report(
     }
 
 
+@router.get("/overdue-report")
+def get_overdue_report(
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    PDF report of overdue loans (active arrears).
+    """
+    from io import BytesIO
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+    from sqlalchemy.orm import selectinload
+
+    report_date = now_eat().date().isoformat()
+
+    overdue_arrears = db.query(Arrears).options(selectinload(Arrears.customer)).filter(
+        Arrears.is_cleared == False,
+    ).order_by(Arrears.arrears_date.desc()).all()
+
+    total_outstanding = sum(float(a.remaining_amount or 0) for a in overdue_arrears)
+
+    NAVY     = colors.HexColor("#0f2942")
+    SLATE    = colors.HexColor("#475569")
+    LIGHT_BG = colors.HexColor("#f8fafc")
+    BORDER   = colors.HexColor("#cbd5e1")
+    GOLD     = colors.HexColor("#c9a84c")
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=letter,
+        topMargin=14*mm, bottomMargin=14*mm,
+        leftMargin=18*mm, rightMargin=18*mm,
+    )
+    base = getSampleStyleSheet()
+
+    inst_style   = ParagraphStyle("OD_Inst",  parent=base["Normal"], fontName="Helvetica-Bold",    fontSize=17, textColor=NAVY,  leading=20)
+    tag_style    = ParagraphStyle("OD_Tag",   parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=8,  textColor=GOLD,  leading=10)
+    rt_style     = ParagraphStyle("OD_RT",    parent=base["Normal"], fontName="Helvetica-Bold",    fontSize=9,  textColor=NAVY,  leading=11, alignment=TA_RIGHT)
+    rs_style     = ParagraphStyle("OD_RS",    parent=base["Normal"], fontName="Helvetica",         fontSize=8,  textColor=SLATE, leading=10, alignment=TA_RIGHT)
+    sl_style     = ParagraphStyle("OD_SL",    parent=base["Normal"], fontName="Helvetica",         fontSize=7.5,textColor=SLATE, leading=10, alignment=TA_CENTER)
+    sv_style     = ParagraphStyle("OD_SV",    parent=base["Normal"], fontName="Helvetica-Bold",    fontSize=13, textColor=NAVY,  leading=16, alignment=TA_CENTER)
+    footer_style = ParagraphStyle("OD_Ftr",   parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=7,  textColor=SLATE, leading=10, alignment=TA_CENTER)
+
+    story = []
+
+    left_tbl = Table(
+        [[Paragraph("KODONGO SAVINGS & CREDIT", inst_style)],
+         [Paragraph("Trusted Financial Solutions", tag_style)]],
+        colWidths=[None],
+    )
+    left_tbl.setStyle(TableStyle([
+        ("LEFTPADDING",   (0,0),(-1,-1), 0), ("RIGHTPADDING",  (0,0),(-1,-1), 0),
+        ("TOPPADDING",    (0,0),(-1,-1), 0), ("BOTTOMPADDING", (0,0),(-1,-1), 2),
+    ]))
+    right_tbl = Table(
+        [[Paragraph("OVERDUE LOANS REPORT", rt_style)],
+         [Paragraph(f"As of: {report_date}", rs_style)],
+         [Paragraph(f"Generated: {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %b %Y, %H:%M')} EAT", rs_style)]],
+        colWidths=[None],
+    )
+    right_tbl.setStyle(TableStyle([
+        ("LEFTPADDING",   (0,0),(-1,-1), 0), ("RIGHTPADDING",  (0,0),(-1,-1), 0),
+        ("TOPPADDING",    (0,0),(-1,-1), 0), ("BOTTOMPADDING", (0,0),(-1,-1), 2),
+    ]))
+    hdr = Table([[left_tbl, right_tbl]], colWidths=["60%","40%"])
+    hdr.setStyle(TableStyle([
+        ("VALIGN", (0,0),(-1,-1), "TOP"),
+        ("LEFTPADDING",  (0,0),(-1,-1), 0), ("RIGHTPADDING", (0,0),(-1,-1), 0),
+    ]))
+    story.append(hdr)
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=2.5, color=NAVY, spaceAfter=2))
+    story.append(HRFlowable(width="100%", thickness=1,   color=GOLD, spaceAfter=10))
+
+    sum_tbl = Table(
+        [[Paragraph("TOTAL OVERDUE LOANS", sl_style), Paragraph("TOTAL OUTSTANDING", sl_style)],
+         [Paragraph(str(len(overdue_arrears)), sv_style), Paragraph(f"KES {total_outstanding:,.2f}", sv_style)]],
+        colWidths=["30%", "70%"],
+    )
+    sum_tbl.setStyle(TableStyle([
+        ("BOX",           (0,0),(-1,-1), 0.75, BORDER),
+        ("LINEAFTER",     (0,0),(0,-1),  0.5,  BORDER),
+        ("TOPPADDING",    (0,0),(-1,-1), 6),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 6),
+    ]))
+    story.append(sum_tbl)
+    story.append(Spacer(1, 14))
+
+    if not overdue_arrears:
+        story.append(Paragraph("No overdue loans found.", base["Normal"]))
+    else:
+        rows = [["#", "CUSTOMER", "PHONE", "LOAN ID", "ORIGINAL (KES)", "REMAINING (KES)", "ARREARS DATE"]]
+        for idx, a in enumerate(overdue_arrears, 1):
+            customer = a.customer
+            rows.append([
+                str(idx),
+                customer.name if customer else "-",
+                customer.phone if customer else "-",
+                str(a.loan_id),
+                f"{float(a.original_amount):,.2f}" if a.original_amount is not None else "-",
+                f"{float(a.remaining_amount):,.2f}" if a.remaining_amount is not None else "-",
+                a.arrears_date.strftime("%d %b %Y") if a.arrears_date else "-",
+            ])
+
+        tbl = Table(rows, repeatRows=1,
+                    colWidths=[8*mm, 36*mm, 26*mm, 18*mm, 28*mm, 28*mm, 26*mm])
+        tbl.setStyle(TableStyle([
+            ("FONTNAME",       (0,0),(-1, 0), "Helvetica-Bold"),
+            ("FONTNAME",       (0,1),(-1,-1), "Helvetica"),
+            ("FONTSIZE",       (0,0),(-1,-1), 7.5),
+            ("TEXTCOLOR",      (0,0),(-1, 0), SLATE),
+            ("BACKGROUND",     (0,0),(-1, 0), LIGHT_BG),
+            ("ALIGN",          (0,0),(0,-1),  "CENTER"),
+            ("ALIGN",          (1,0),(3,-1),  "LEFT"),
+            ("ALIGN",          (4,0),(5,-1),  "RIGHT"),
+            ("ALIGN",          (6,0),(6,-1),  "CENTER"),
+            ("LINEBELOW",      (0,0),(-1, 0), 0.75, BORDER),
+            ("LINEBELOW",      (0,1),(-1,-2), 0.35, BORDER),
+            ("BOX",            (0,0),(-1,-1), 0.75, BORDER),
+            ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, LIGHT_BG]),
+            ("TOPPADDING",     (0,0),(-1,-1), 4),
+            ("BOTTOMPADDING",  (0,0),(-1,-1), 4),
+            ("LEFTPADDING",    (0,0),(-1,-1), 5),
+            ("RIGHTPADDING",   (0,0),(-1,-1), 5),
+        ]))
+        story.append(tbl)
+
+    story.append(Spacer(1, 18))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
+    story.append(Paragraph(
+        f"Generated on {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %B %Y at %H:%M EAT')}. "
+        f"This report is for internal use only. Kodongo Savings & Credit.",
+        footer_style,
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=overdue_report_{report_date}.pdf"
+        },
+    )
+
 @router.get("/reports/defaulters-summary")
 def defaulters_report(
     db: Session = Depends(get_sync_db),
