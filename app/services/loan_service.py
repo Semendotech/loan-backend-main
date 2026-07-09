@@ -139,7 +139,11 @@ class LoanService:
         Check if loan should be flagged as DEFAULTER.
 
         Rule: DEFAULTER if in ACTIVE period (days 1-30) AND
-              no payment made in the last 5 consecutive days.
+              total payments to date < daily_instalment * days_since_start
+
+        This naturally enforces the 5-day rule: a customer who pays nothing
+        for 5 days will have actual=0 vs expected=daily_instalment*5.
+        A customer who overpays upfront is protected until their credit runs out.
 
         Returns True if flagged, False otherwise.
         """
@@ -151,38 +155,32 @@ class LoanService:
         if not loan.is_active_period:
             return False
 
-        # Find the most recent payment date
-        last_payment = db.query(func.max(Installment.payment_date)).filter(
+        days_elapsed = loan.days_since_start
+        if days_elapsed < 1:
+            return False
+
+        daily_instalment = loan.daily_instalment
+        expected_total = daily_instalment * days_elapsed
+
+        # Sum of all payments ever made on this loan
+        actual_total = db.query(func.sum(Installment.amount)).filter(
             Installment.loan_id == loan_id,
-        ).scalar()
+        ).scalar() or 0
 
-        today = now_eat()
+        is_defaulter = actual_total < expected_total
 
-        if last_payment is None:
-            # No payments at all - defaulter if loan is 5+ days old
-            days_since_start = loan.days_since_start
-            is_defaulter = days_since_start >= 5
-        else:
-            # Make last_payment timezone-aware if needed
-            if last_payment.tzinfo is None:
-                from zoneinfo import ZoneInfo
-                last_payment = last_payment.replace(tzinfo=ZoneInfo("Africa/Nairobi"))
-            days_since_last_payment = (today - last_payment).days
-            is_defaulter = days_since_last_payment >= 5
-
-        # Update loan if status changed
         if is_defaulter and not loan.is_defaulter:
             loan.is_defaulter = True
-            loan.defaulter_flagged_date = today
+            loan.defaulter_flagged_date = now_eat()
 
             flag_record = DefaulterFlag(
                 loan_id=loan_id,
                 customer_id=loan.customer_id,
                 action="FLAGGED",
-                reason=f"No payment received in 5 or more consecutive days.",
-                days_checked=5,
-                required_amount=None,
-                actual_amount=None,
+                reason=f"Total paid ({actual_total:.2f}) < expected ({expected_total:.2f}) after {days_elapsed} days.",
+                days_checked=days_elapsed,
+                required_amount=expected_total,
+                actual_amount=actual_total,
             )
             db.add(flag_record)
             db.commit()
@@ -195,10 +193,10 @@ class LoanService:
                 loan_id=loan_id,
                 customer_id=loan.customer_id,
                 action="CLEARED",
-                reason=f"Payment received within last 5 days.",
-                days_checked=5,
-                required_amount=None,
-                actual_amount=None,
+                reason=f"Total paid ({actual_total:.2f}) >= expected ({expected_total:.2f}) after {days_elapsed} days.",
+                days_checked=days_elapsed,
+                required_amount=expected_total,
+                actual_amount=actual_total,
             )
             db.add(flag_record)
             db.commit()
@@ -282,14 +280,38 @@ class LoanService:
     def get_active_loans(db: Session, limit: int = 50, offset: int = 0, search: str = "") -> tuple[list, int]:
         """
         Get ACTIVE loans (days 1-30 from creation).
-        Filter: status == ACTIVE AND (today - start_date).days <= 30
-        Returns: (loans list, total count)
+        Filter: status == ACTIVE AND days since start <= 30
         """
         from sqlalchemy.orm import selectinload
         from app.models import Customer as _Customer
+
         query = db.query(Loan).options(selectinload(Loan.customer)).join(Loan.customer).filter(
             Loan.status == LoanStatus.ACTIVE,
             func.datediff(func.now(), Loan.start_date) <= 30,
+        )
+        if search:
+            like = f"%{search}%"
+            query = query.filter(
+                (_Customer.name.ilike(like)) |
+                (_Customer.id_number.ilike(like)) |
+                (_Customer.phone.ilike(like))
+            )
+        total = query.count()
+        loans = query.limit(limit).offset(offset).all()
+        return loans, total
+
+    @staticmethod
+    def get_payable_loans(db: Session, limit: int = 50, offset: int = 0, search: str = "") -> tuple[list, int]:
+        """
+        Get all loans with an outstanding balance, for the Pay Installments screen.
+        Includes ACTIVE, OVERDUE, and ARREARS statuses.
+        """
+        from sqlalchemy.orm import selectinload
+        from app.models import Customer as _Customer
+
+        query = db.query(Loan).options(selectinload(Loan.customer)).join(Loan.customer).filter(
+            Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.ARREARS]),
+            Loan.remaining_amount > 0,
         )
         if search:
             like = f"%{search}%"
