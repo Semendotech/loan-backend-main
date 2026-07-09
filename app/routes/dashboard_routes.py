@@ -818,6 +818,16 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
             else:
                 break
 
+        # Arrears = cumulative paid minus cumulative expected, through target_date.
+        # Positive => customer is ahead (credit carried forward).
+        # Negative => customer owes arrears.
+        elapsed_days = (target_date - start).days + 1
+        cumulative_expected = daily_instalment * elapsed_days
+        cumulative_paid = sum(
+            amt for d, amt in sums_by_date.items() if start <= d <= target_date
+        )
+        arrears = cumulative_paid - cumulative_expected
+
         customer = loan.customer
         items.append({
             "loan_id": loan.id,
@@ -827,6 +837,7 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
             "daily_instalment": daily_instalment,
             "loan_balance": float(loan.remaining_amount if loan.remaining_amount is not None else loan.total_amount),
             "skipped_days": skipped_days,
+            "arrears": arrears,
         })
 
     items.sort(key=lambda r: r["skipped_days"], reverse=True)
@@ -955,7 +966,16 @@ def get_uncollected_dues_report(
     if not items:
         story.append(Paragraph("All dues have been collected for this date.", base["Normal"]))
     else:
-        rows = [["#", "CUSTOMER", "PHONE", "DAILY INSTALMENT (KES)", "LOAN BALANCE (KES)", "SKIPPED DAYS"]]
+        def _fmt_arrears(val):
+            v = float(val)
+            if v > 0.01:
+                return f"+{v:,.2f}"
+            elif v < -0.01:
+                return f"-{abs(v):,.2f}"
+            else:
+                return "0.00"
+
+        rows = [["#", "CUSTOMER", "PHONE", "DAILY INSTALMENT (KES)", "LOAN BALANCE (KES)", "SKIPPED DAYS", "ARREARS (KES)"]]
         for idx, row in enumerate(items, 1):
             rows.append([
                 str(idx),
@@ -964,10 +984,11 @@ def get_uncollected_dues_report(
                 f"{float(row['daily_instalment']):,.2f}",
                 f"{float(row['loan_balance']):,.2f}",
                 str(row["skipped_days"]),
+                _fmt_arrears(row.get("arrears", 0)),
             ])
 
         tbl = Table(rows, repeatRows=1,
-                    colWidths=[8*mm, 42*mm, 30*mm, 32*mm, 32*mm, 26*mm])
+                    colWidths=[7*mm, 36*mm, 26*mm, 28*mm, 28*mm, 20*mm, 26*mm])
         tbl.setStyle(TableStyle([
             ("FONTNAME",       (0,0),(-1, 0), "Helvetica-Bold"),
             ("FONTNAME",       (0,1),(-1,-1), "Helvetica"),
@@ -977,6 +998,7 @@ def get_uncollected_dues_report(
             ("ALIGN",          (0,0),(0,-1),  "CENTER"),
             ("ALIGN",          (1,0),(2,-1),  "LEFT"),
             ("ALIGN",          (3,0),(4,-1),  "RIGHT"),
+            ("ALIGN",          (6,0),(6,-1),  "RIGHT"),
             ("ALIGN",          (5,0),(5,-1),  "CENTER"),
             ("LINEBELOW",      (0,0),(-1, 0), 0.75, BORDER),
             ("LINEBELOW",      (0,1),(-1,-2), 0.35, BORDER),
