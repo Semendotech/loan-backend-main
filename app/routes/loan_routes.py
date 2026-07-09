@@ -293,15 +293,35 @@ def get_overdue_loans(
 def get_cleared_loans(
     limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
+    start_date: str = None,
+    end_date: str = None,
+    q: str = None,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Get COMPLETED loans (fully paid, remaining_amount = 0).
-    
-    Filter: status == COMPLETED
+
+    Filter: status == COMPLETED, optional start_date/end_date/q
     """
-    loans, total = LoanService.get_completed_loans(db, limit=limit, offset=offset)
+    from datetime import datetime as _dt
+    from fastapi import HTTPException
+
+    dt_start = dt_end = None
+    try:
+        if start_date:
+            dt_start = _dt.strptime(start_date, "%Y-%m-%d")
+        if end_date:
+            dt_end = _dt.strptime(end_date, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, microsecond=999999
+            )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    loans, total = LoanService.get_completed_loans(
+        db, limit=limit, offset=offset,
+        start_date=dt_start, end_date=dt_end, q=q,
+    )
 
     def _to_response(loan):
         resp = LoanResponse.from_orm(loan)

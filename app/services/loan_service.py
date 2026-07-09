@@ -385,19 +385,40 @@ class LoanService:
         return loans, total
 
     @staticmethod
-    def get_completed_loans(db: Session, limit: int = 50, offset: int = 0) -> tuple[list, int]:
+    def get_completed_loans(
+        db: Session,
+        limit: int = 50,
+        offset: int = 0,
+        start_date=None,
+        end_date=None,
+        q: str = None,
+    ) -> tuple[list, int]:
         """
         Get COMPLETED loans (fully paid).
-        
-        Filter: status == COMPLETED
-        
+
+        Filter: status == COMPLETED, optional completed_at date range, optional search
+
         Returns: (loans list, total count)
         """
         from sqlalchemy.orm import selectinload
         query = db.query(Loan).options(selectinload(Loan.customer)).filter(Loan.status == LoanStatus.COMPLETED)
 
+        if start_date is not None:
+            query = query.filter(Loan.completed_at >= start_date)
+        if end_date is not None:
+            query = query.filter(Loan.completed_at <= end_date)
+
+        if q and q.strip():
+            search = f"%{q.strip()}%"
+            from app.models import Customer
+            query = query.join(Loan.customer).filter(
+                (Customer.name.ilike(search)) |
+                (Customer.id_number.ilike(search)) |
+                (Customer.phone.ilike(search))
+            )
+
         total = query.count()
-        loans = query.limit(limit).offset(offset).all()
+        loans = query.order_by(Loan.completed_at.desc()).limit(limit).offset(offset).all()
 
         return loans, total
 
