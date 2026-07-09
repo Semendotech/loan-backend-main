@@ -417,7 +417,7 @@ def get_disbursed_loans(
     skip: int = 0,
     limit: int = 200,
     db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_sync),
 ):
     """
     Loans disbursed (start_date) within the given date range.
