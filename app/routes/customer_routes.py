@@ -10,16 +10,17 @@ from sqlalchemy import or_, text, func
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from ..database import get_db
-from ..models import Customer, Loan, Arrears, LoanStatus
+from ..models import Customer, Loan, Arrears, LoanStatus, DefaulterFlag
 from ..schemas import (
     CustomerCreate,
     CustomerResponse,
     CustomerCheck,
     CustomerCheckRequest,
     CustomerPhotoUpdate,
+    CustomerUpdate,
 )
 from typing import List
-from ..auth import get_current_user
+from ..auth import get_current_user, get_current_admin
 from ..utils.phone import hash_phone, normalize_phone
 
 # For PDF generation
@@ -457,6 +458,77 @@ async def update_customer_photo(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
     customer.profile_image_url = sanitized_url
+    await db.commit()
+    await db.refresh(customer)
+    return customer
+
+
+@router.patch("/{customer_id}", response_model=CustomerResponse)
+async def update_customer(
+    customer_id: int,
+    payload: CustomerUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_admin),
+):
+    """
+    Update a customer's phone number and/or ID number. Admin only.
+
+    ID number is a foreign key target for loans.customer_id and
+    defaulter_flags.customer_id, so if it changes we cascade the update
+    to those tables in the same transaction to keep loan history linked.
+    """
+    result = await db.execute(select(Customer).filter(Customer.id == customer_id))
+    customer = result.scalar_one_or_none()
+    if not customer:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    new_id_number = payload.id_number.strip() if payload.id_number else None
+    new_phone = payload.phone.strip() if payload.phone else None
+
+    old_id_number = customer.id_number
+
+    if new_id_number and new_id_number != old_id_number:
+        conflict = await db.execute(
+            select(Customer).filter(
+                Customer.id_number == new_id_number,
+                Customer.id != customer_id,
+            )
+        )
+        if conflict.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Another customer with this ID number already exists",
+            )
+
+        # Cascade: update children BEFORE the parent, so FK constraints
+        # never point at a nonexistent id_number mid-transaction.
+        loans_result = await db.execute(select(Loan).filter(Loan.customer_id == old_id_number))
+        for loan in loans_result.scalars().all():
+            loan.customer_id = new_id_number
+
+        flags_result = await db.execute(
+            select(DefaulterFlag).filter(DefaulterFlag.customer_id == old_id_number)
+        )
+        for flag in flags_result.scalars().all():
+            flag.customer_id = new_id_number
+
+        customer.id_number = new_id_number
+
+    if new_phone and new_phone != customer.phone:
+        conflict = await db.execute(
+            select(Customer).filter(
+                Customer.phone == new_phone,
+                Customer.id != customer_id,
+            )
+        )
+        if conflict.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Another customer with this phone number already exists",
+            )
+        customer.phone = new_phone
+        customer.phone_hash = hash_phone(new_phone)
+
     await db.commit()
     await db.refresh(customer)
     return customer

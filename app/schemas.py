@@ -98,6 +98,12 @@ class CustomerPhotoUpdate(BaseModel):
     profile_image_url: str
 
 
+class CustomerUpdate(BaseModel):
+    """Admin-only update of a customer's phone number and/or ID number."""
+    id_number: Optional[str] = None
+    phone: Optional[str] = None
+
+
 class CustomerCheckRequest(BaseModel):
     customer_id: Optional[int] = None
     id_number: Optional[str] = None
