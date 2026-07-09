@@ -319,6 +319,54 @@ def get_cleared_loans(
     )
 
 
+# --- Disbursed loans list ---
+@router.get("/disbursed", response_model=LoanListResponse)
+def get_disbursed_loans(
+    start_date: str = None,
+    end_date: str = None,
+    q: str = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=10000),
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user_sync),
+):
+    """Loans disbursed (start_date) within the given date range."""
+    from datetime import datetime as _dt, date as _date
+    from sqlalchemy.orm import selectinload
+    from app.models import Customer
+    today = _date.today()
+    try:
+        d_start = _dt.strptime(start_date, "%Y-%m-%d").date() if start_date else today
+        d_end   = _dt.strptime(end_date,   "%Y-%m-%d").date() if end_date   else today
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+    query = (
+        db.query(Loan)
+        .options(selectinload(Loan.customer))
+        .filter(Loan.start_date >= d_start, Loan.start_date <= d_end)
+    )
+    if q and q.strip():
+        search = f"%{q.strip()}%"
+        query = query.join(Loan.customer).filter(
+            (Customer.name.ilike(search)) |
+            (Customer.id_number.ilike(search)) |
+            (Customer.phone.ilike(search))
+        )
+    total = query.count()
+    loans = query.order_by(Loan.start_date.desc()).offset(skip).limit(limit).all()
+    def _to_response(loan):
+        resp = LoanResponse.from_orm(loan)
+        if loan.customer:
+            resp.customer = CustomerBrief.from_orm(loan.customer)
+        return resp
+    return LoanListResponse(
+        items=[_to_response(loan) for loan in loans],
+        total=total,
+        count=total,
+        limit=limit,
+        offset=skip,
+        has_more=(skip + limit) < total,
+    )
 @router.get("/{loan_id}", response_model=LoanResponse)
 def get_loan_detail(
     loan_id: int,
@@ -406,51 +454,3 @@ def delete_loan(
 
 
 
-# --- Disbursed loans list ---
-@router.get("/disbursed", response_model=LoanListResponse)
-def get_disbursed_loans(
-    start_date: str = None,
-    end_date: str = None,
-    q: str = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(200, ge=1, le=10000),
-    db: Session = Depends(get_sync_db),
-    current_user: dict = Depends(get_current_user_sync),
-):
-    """Loans disbursed (start_date) within the given date range."""
-    from datetime import datetime as _dt, date as _date
-    from sqlalchemy.orm import selectinload
-    from app.models import Customer
-    today = _date.today()
-    try:
-        d_start = _dt.strptime(start_date, "%Y-%m-%d").date() if start_date else today
-        d_end   = _dt.strptime(end_date,   "%Y-%m-%d").date() if end_date   else today
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
-    query = (
-        db.query(Loan)
-        .options(selectinload(Loan.customer))
-        .filter(Loan.start_date >= d_start, Loan.start_date <= d_end)
-    )
-    if q and q.strip():
-        search = f"%{q.strip()}%"
-        query = query.join(Loan.customer).filter(
-            (Customer.name.ilike(search)) |
-            (Customer.id_number.ilike(search)) |
-            (Customer.phone.ilike(search))
-        )
-    total = query.count()
-    loans = query.order_by(Loan.start_date.desc()).offset(skip).limit(limit).all()
-    def _to_response(loan):
-        resp = LoanResponse.from_orm(loan)
-        if loan.customer:
-            resp.customer = CustomerBrief.from_orm(loan.customer)
-        return resp
-    return LoanListResponse(
-        items=[_to_response(loan) for loan in loans],
-        total=total,
-        count=total,
-        limit=limit,
-        offset=skip,
-        has_more=(skip + limit) < total,
-    )
