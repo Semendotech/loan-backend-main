@@ -132,6 +132,14 @@ def get_dashboard_summary(
 
     # Total customers in the system
     total_customers = db.query(func.count(Customer.id)).scalar() or 0
+
+    # Defaulters count: ACTIVE loans flagged is_defaulter == true
+    # (same definition used by the Defaulters page/report)
+    defaulters_count = db.query(func.count(Loan.id)).filter(
+        Loan.is_defaulter == True,
+        Loan.status == LoanStatus.ACTIVE,
+    ).scalar() or 0
+
     elapsed = time.time() - start_time
     print(f">>> DASHBOARD /summary took {elapsed:.3f}s", flush=True)
 
@@ -144,6 +152,7 @@ def get_dashboard_summary(
         "completed_loans_amount_this_month": completed_amount_this_month,
         "interest_last_three_months": interest_earned,
         "total_customers": total_customers,
+        "defaulters_count": defaulters_count,
         "overdue_count_last_three_months": overdue_count_last_three_months,
         "arrears_count_last_three_months": overdue_count_last_three_months,
         "completed_count_last_3_months": completed_last_3_months,
