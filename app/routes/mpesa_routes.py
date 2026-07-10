@@ -276,7 +276,7 @@ async def mpesa_confirmation(
             f"KSh {amount:.2f} paid to Kodongo Savings and Credit on {payment_date} at {payment_time}. "
             f"Your loan balance is KSh {loan.remaining_amount:.2f}. "
             f"Due date: {due_date_str}. "
-            f"For any inquiries call 0718016498."
+            f"For any inquiries call 0743823009."
         )
 
         if customer.phone:

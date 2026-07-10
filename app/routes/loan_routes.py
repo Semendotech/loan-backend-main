@@ -170,7 +170,7 @@ def create_loan(
         # Send SMS notification to customer
         if customer and customer.phone:
             from app.routes.mpesa_routes import send_sms
-            loan_message = f"Loan of KSh {loan_data.amount} approved. Due date: {loan.due_date}. Daily instalment: KSh {loan.total_amount / 30:.2f}. Call 0718016498 for inquiries."
+            loan_message = f"Loan of KSh {loan_data.amount} approved. Due date: {loan.due_date}. Daily instalment: KSh {loan.total_amount / 30:.2f}. Call 0743823009 for inquiries."
             try:
                 asyncio.run(send_sms(customer.phone, loan_message))
             except Exception as sms_err:

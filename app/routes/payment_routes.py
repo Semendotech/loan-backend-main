@@ -118,7 +118,14 @@ def record_payment(
         if loan_after and loan_after.customer and loan_after.customer.phone:
             from app.routes.mpesa_routes import send_sms
             due_date_str = loan_after.due_date.strftime("%d/%m/%Y") if loan_after.due_date else "N/A"
-            sms_message = f"KSh {payment.amount:.2f} payment recorded on {now}. Balance: KSh {balance_after:.2f}. Due: {due_date_str}. Call 0718016498."
+            payment_date = now_eat_str("%d/%m/%Y")
+            payment_time = now_eat_str("%H:%M")
+            sms_message = (
+                f"KSh {payment.amount:.2f} paid to Kodongo Savings and Credit on {payment_date} at {payment_time}. "
+                f"Your loan balance is KSh {balance_after:.2f}. "
+                f"Due date: {due_date_str}. "
+                f"For any inquiries call 0743823009."
+            )
             try:
                 import asyncio
                 asyncio.run(send_sms(loan_after.customer.phone, sms_message))

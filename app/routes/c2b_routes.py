@@ -270,7 +270,7 @@ async def mpesa_confirmation(request: Request, db: AsyncSession = Depends(get_db
             f"Payment received! KSh {amount:.2f} paid to Kodongo Trading Enterprises. "
             f"Your Outstanding loan balance is KSh {loan.remaining_amount:.2f} "
             f"on {payment_date} at {payment_time}. "
-            f"For any inquiries call 0718016498."
+            f"For any inquiries call 0743823009."
         )
 
         if customer.phone:
