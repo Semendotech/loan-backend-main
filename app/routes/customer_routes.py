@@ -657,7 +657,30 @@ async def delete_customer(
         select(Loan).filter(Loan.customer_id == customer.id_number)
     )
     all_loans = all_loans_result.scalars().all()
-    
+
+    loan_ids = [loan.id for loan in all_loans]
+
+    if loan_ids:
+        # MpesaTransaction.loan_id has no DB-level cascade, and the ORM has
+        # no relationship from Loan -> MpesaTransaction, so deleting a loan
+        # while transactions still reference it violates the FK constraint.
+        # Detach them instead of deleting: the payment record is preserved
+        # and correctly reappears as an unmatched transaction.
+        from ..models import MpesaTransaction, DefaulterFlag
+        tx_result = await db.execute(
+            select(MpesaTransaction).filter(MpesaTransaction.loan_id.in_(loan_ids))
+        )
+        for tx in tx_result.scalars().all():
+            tx.loan_id = None
+
+        # DefaulterFlag.customer_id/loan_id are both non-nullable, so these
+        # rows must be deleted outright rather than detached.
+        flags_result = await db.execute(
+            select(DefaulterFlag).filter(DefaulterFlag.loan_id.in_(loan_ids))
+        )
+        for flag in flags_result.scalars().all():
+            await db.delete(flag)
+
     for loan in all_loans:
         await db.delete(loan)
     
