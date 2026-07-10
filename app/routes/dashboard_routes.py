@@ -764,13 +764,21 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
     """
     Shared logic for the JSON and PDF report endpoints.
 
-    Definition: ACTIVE loans where the instalment due for the selected date
-    (end_date) has not been received, i.e. no payment recorded on that date
-    covering at least the loan's daily_instalment. skipped_days = number of
-    consecutive days (ending at end_date, within the loan's 30-day active
-    window) where the daily instalment was not fully covered.
+    Definition: ACTIVE/OVERDUE loans that are behind on payments within the
+    selected From-To window, i.e. cumulative amount paid within [from_date,
+    to_date] is less than cumulative amount expected (daily_instalment x
+    days elapsed) within that same window. This is "forgiving": a customer
+    who underpaid on one day but caught up later within the window will NOT
+    appear if their window-cumulative arrears is back to zero or positive.
+
+    skipped_days = number of consecutive days (ending at to_date, never
+    going before window_start) where that specific day's payment fell
+    short of the daily instalment.
     """
-    target_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    from_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    to_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    if from_date > to_date:
+        from_date, to_date = to_date, from_date
 
     # Load all active/overdue loans in one query
     from sqlalchemy.orm import selectinload
@@ -778,18 +786,22 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
         Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
     ).all()
 
-    # Filter to loans whose active window includes target_date
+    # Filter to loans whose active window includes to_date, and compute
+    # each loan's effective window_start (loan start, clamped to from_date)
     eligible = []
     for loan in loans:
         if not loan.start_date:
             continue
-        start = loan.start_date.date() if isinstance(loan.start_date, datetime) else loan.start_date
-        if target_date < start:
+        loan_start = loan.start_date.date() if isinstance(loan.start_date, datetime) else loan.start_date
+        if to_date < loan_start:
             continue
-        last_day = start + timedelta(days=29)
-        if target_date > last_day:
+        last_day = loan_start + timedelta(days=29)
+        if to_date > last_day:
             continue
-        eligible.append((loan, start))
+        window_start = max(loan_start, from_date)
+        if window_start > to_date:
+            continue
+        eligible.append((loan, window_start))
 
     if not eligible:
         return []
@@ -798,7 +810,7 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
     loan_ids = [loan.id for loan, _ in eligible]
     all_installments = db.query(Installment).filter(
         Installment.loan_id.in_(loan_ids),
-        func.date(Installment.payment_date) <= target_date,
+        func.date(Installment.payment_date) <= to_date,
     ).all()
 
     # Group installments by (loan_id, date)
@@ -809,33 +821,34 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
         sums[inst.loan_id][d] += float(inst.amount or 0)
 
     items = []
-    for loan, start in eligible:
+    for loan, window_start in eligible:
         daily_instalment = loan.daily_instalment
         sums_by_date = sums[loan.id]
 
-        paid_on_target = sums_by_date.get(target_date, 0.0)
-        if paid_on_target >= daily_instalment - 0.01:
-            continue
+        # Window-bounded cumulative arrears: paid vs expected within
+        # [window_start, to_date] only. Forgiving: a catch-up payment
+        # later in the window offsets an earlier miss.
+        elapsed_days = (to_date - window_start).days + 1
+        window_expected = daily_instalment * elapsed_days
+        window_paid = sum(
+            amt for d, amt in sums_by_date.items() if window_start <= d <= to_date
+        )
+        arrears = window_paid - window_expected
 
+        if arrears >= -0.01:
+            continue  # not behind within this window
+
+        # Skipped days: consecutive days ending at to_date, never going
+        # before window_start, where that day's payment fell short.
         skipped_days = 0
-        current = target_date
-        while current >= start:
+        current = to_date
+        while current >= window_start:
             paid = sums_by_date.get(current, 0.0)
             if paid < daily_instalment - 0.01:
                 skipped_days += 1
                 current -= timedelta(days=1)
             else:
                 break
-
-        # Arrears = cumulative paid minus cumulative expected, through target_date.
-        # Positive => customer is ahead (credit carried forward).
-        # Negative => customer owes arrears.
-        elapsed_days = (target_date - start).days + 1
-        cumulative_expected = daily_instalment * elapsed_days
-        cumulative_paid = sum(
-            amt for d, amt in sums_by_date.items() if start <= d <= target_date
-        )
-        arrears = cumulative_paid - cumulative_expected
 
         customer = loan.customer
         items.append({
