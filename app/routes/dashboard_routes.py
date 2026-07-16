@@ -1759,8 +1759,17 @@ def _calc_arrears(db: Session):
         # Safety net: expected can never exceed the total loan amount.
         expected_total = min(expected_total, loan.total_amount)
 
-        paid_total = sum(sums_by_date.values())
+        paid_total_installments = sum(sums_by_date.values())
+        # Authoritative paid amount, from the loan's own balance bookkeeping.
+        # Covers payments that updated remaining_amount without leaving a
+        # matching Installment row (e.g. some M-Pesa callback paths).
+        paid_total_balance = loan.total_amount - loan.remaining_amount
+        paid_total = max(paid_total_installments, paid_total_balance)
+
         backlog = expected_total - paid_total
+        # Backlog can never exceed what the customer actually still owes -
+        # there are no penalties and the loan balance itself never grows.
+        backlog = min(backlog, loan.remaining_amount)
 
         if backlog <= 0.01:
             continue  # not behind, lifetime-cumulative
