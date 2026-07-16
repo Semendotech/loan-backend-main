@@ -1162,6 +1162,28 @@ def get_payments_report(
         ("BOTTOMPADDING", (0,0),(-1,-1), 6),
     ]))
     story.append(sum_tbl)
+    story.append(Spacer(1, 10))
+
+    # Staff totals strip
+    STAFF_NAMES = ["William", "Richard", "Emily", "Elliot"]
+    staff_totals = {name: 0.0 for name in STAFF_NAMES}
+    for inst in installments:
+        rb = (inst.recorded_by or "").strip()
+        for name in STAFF_NAMES:
+            if rb.lower() == name.lower():
+                staff_totals[name] += float(inst.amount or 0)
+                break
+
+    staff_header_row = [Paragraph(name.upper(), sl_style) for name in STAFF_NAMES]
+    staff_value_row = [Paragraph(f"KES {staff_totals[name]:,.2f}", sv_style) for name in STAFF_NAMES]
+    staff_tbl = Table([staff_header_row, staff_value_row], colWidths=["25%", "25%", "25%", "25%"])
+    staff_tbl.setStyle(TableStyle([
+        ("BOX",           (0,0),(-1,-1), 0.75, BORDER),
+        ("LINEAFTER",     (0,0),(-2,-1), 0.5,  BORDER),
+        ("TOPPADDING",    (0,0),(-1,-1), 6),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 6),
+    ]))
+    story.append(staff_tbl)
     story.append(Spacer(1, 14))
 
     # Payments table
