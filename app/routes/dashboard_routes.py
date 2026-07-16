@@ -766,60 +766,51 @@ def defaulters_report(
 
 # ============ UNCOLLECTED DUES ============
 
-def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
+def _calc_uncollected_dues(db: Session, check_date_str: str):
     """
-    Shared logic for the JSON and PDF report endpoints.
+    Shared logic for the JSON (/uncollected-dues) and PDF report endpoints.
 
-    Definition: ACTIVE/OVERDUE loans that are behind on payments within the
-    selected From-To window, i.e. cumulative amount paid within [from_date,
-    to_date] is less than cumulative amount expected (daily_instalment x
-    days elapsed) within that same window. This is "forgiving": a customer
-    who underpaid on one day but caught up later within the window will NOT
-    appear if their window-cumulative arrears is back to zero or positive.
+    A loan is "uncollected" on check_date if its running balance -
+    cumulative paid minus cumulative expected, from loan start through
+    check_date - is still negative. This mirrors _calc_arrears's
+    walk-forward logic: a prepayment/overpayment on an earlier day rolls
+    forward automatically and can cover check_date (and beyond), so the
+    loan will NOT appear here even if nothing was paid ON check_date
+    itself.
 
-    skipped_days = number of consecutive days (ending at to_date, never
-    going before window_start) where that specific day's payment fell
-    short of the daily instalment.
+    "paid" in the returned row is the literal amount paid ON check_date
+    only (0 if nothing landed that day) - independent of whether the loan
+    is actually behind overall, so staff can see at a glance whether a
+    partial payment came in that day.
     """
-    from_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-    to_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-    if from_date > to_date:
-        from_date, to_date = to_date, from_date
+    check_date = datetime.strptime(check_date_str, "%Y-%m-%d").date()
 
-    # Load all active/overdue loans in one query
     from sqlalchemy.orm import selectinload
     loans = db.query(Loan).options(selectinload(Loan.customer)).filter(
         Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
     ).all()
 
-    # Filter to loans whose active window includes to_date, and compute
-    # each loan's effective window_start (loan start, clamped to from_date)
     eligible = []
     for loan in loans:
         if not loan.start_date:
             continue
         loan_start = loan.start_date.date() if isinstance(loan.start_date, datetime) else loan.start_date
-        if to_date < loan_start:
+        if check_date < loan_start:
             continue
         last_day = loan_start + timedelta(days=29)
-        if to_date > last_day:
+        if check_date > last_day:
             continue
-        window_start = max(loan_start, from_date)
-        if window_start > to_date:
-            continue
-        eligible.append((loan, window_start))
+        eligible.append((loan, loan_start))
 
     if not eligible:
         return []
 
-    # Fetch ALL installments for eligible loans in a single query
     loan_ids = [loan.id for loan, _ in eligible]
     all_installments = db.query(Installment).filter(
         Installment.loan_id.in_(loan_ids),
-        func.date(Installment.payment_date) <= to_date,
+        func.date(Installment.payment_date) <= check_date,
     ).all()
 
-    # Group installments by (loan_id, date)
     from collections import defaultdict
     sums: dict = defaultdict(lambda: defaultdict(float))
     for inst in all_installments:
@@ -827,34 +818,23 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
         sums[inst.loan_id][d] += float(inst.amount or 0)
 
     items = []
-    for loan, window_start in eligible:
+    for loan, loan_start in eligible:
         daily_instalment = loan.daily_instalment
         sums_by_date = sums[loan.id]
 
-        # Window-bounded cumulative arrears: paid vs expected within
-        # [window_start, to_date] only. Forgiving: a catch-up payment
-        # later in the window offsets an earlier miss.
-        elapsed_days = (to_date - window_start).days + 1
-        window_expected = daily_instalment * elapsed_days
-        window_paid = sum(
-            amt for d, amt in sums_by_date.items() if window_start <= d <= to_date
-        )
-        arrears = window_paid - window_expected
+        due = loan.due_date.date() if isinstance(loan.due_date, datetime) else loan.due_date
 
-        if arrears >= -0.01:
-            continue  # not behind within this window
-
-        # Skipped days: consecutive days ending at to_date, never going
-        # before window_start, where that day's payment fell short.
-        skipped_days = 0
-        current = to_date
-        while current >= window_start:
+        running_balance = 0.0
+        current = loan_start
+        while current <= check_date:
             paid = sums_by_date.get(current, 0.0)
-            if paid < daily_instalment - 0.01:
-                skipped_days += 1
-                current -= timedelta(days=1)
-            else:
-                break
+            running_balance += paid - daily_instalment
+            current += timedelta(days=1)
+
+        if running_balance >= -0.01:
+            continue
+
+        paid_on_date = sums_by_date.get(check_date, 0.0)
 
         customer = loan.customer
         items.append({
@@ -864,13 +844,11 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
             "customer_id_number": loan.customer_id,
             "daily_instalment": daily_instalment,
             "loan_balance": float(loan.remaining_amount if loan.remaining_amount is not None else loan.total_amount),
-            "skipped_days": skipped_days,
-            "arrears": arrears,
+            "due_date": str(due) if due else None,
+            "paid": paid_on_date,
         })
 
-    items.sort(key=lambda r: r["skipped_days"], reverse=True)
     return items
-
 
 @router.get("/uncollected-dues")
 def get_uncollected_dues(
@@ -881,67 +859,14 @@ def get_uncollected_dues(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Get loans (any non-completed status, balance > 0) whose instalment for
-    the given single `date` (default: today) has not been collected.
-
-    This replaced the old date-range cumulative check, which kept showing
-    customers even after they paid "yesterday" if they had an older
-    backlog within the selected window - that lifetime-cumulative concept
-    is now served separately by /arrears.
+    Get loans (any non-completed status, balance > 0) whose running
+    balance is still negative as of the given single `date` (default:
+    today). Delegates to the shared _calc_uncollected_dues helper so
+    this JSON endpoint and the PDF report always agree.
     """
-    from datetime import datetime as _dt
+    check_date_str = date or now_eat().date().isoformat()
 
-    check_date = (
-        _dt.strptime(date, "%Y-%m-%d").date() if date else now_eat().date()
-    )
-
-    from sqlalchemy.orm import selectinload
-
-    loans = db.query(Loan).options(selectinload(Loan.customer)).filter(
-        Loan.status != LoanStatus.COMPLETED,
-        Loan.remaining_amount > 0,
-    ).all()
-
-    eligible = []
-    for loan in loans:
-        start = loan.start_date.date() if isinstance(loan.start_date, _dt) else loan.start_date
-        if not start or check_date < start:
-            continue
-        last_day = start + timedelta(days=29)
-        if check_date > last_day:
-            continue
-        eligible.append(loan)
-
-    if not eligible:
-        return {"items": [], "total": 0, "limit": limit, "offset": offset}
-
-    loan_ids = [loan.id for loan in eligible]
-    day_installments = db.query(Installment).filter(
-        Installment.loan_id.in_(loan_ids),
-        func.date(Installment.payment_date) == check_date,
-    ).all()
-
-    paid_today_by_loan = {}
-    for inst in day_installments:
-        paid_today_by_loan[inst.loan_id] = paid_today_by_loan.get(inst.loan_id, 0.0) + float(inst.amount or 0)
-
-    items = []
-    for loan in eligible:
-        paid_today = paid_today_by_loan.get(loan.id, 0.0)
-        if paid_today >= loan.daily_instalment - 0.01:
-            continue  # fully paid for this date
-
-        customer = loan.customer
-        items.append({
-            "loan_id": loan.id,
-            "customer_name": customer.name if customer else None,
-            "customer_phone": customer.phone if customer else None,
-            "customer_id_number": loan.customer_id,
-            "daily_instalment": loan.daily_instalment,
-            "loan_balance": float(loan.remaining_amount if loan.remaining_amount is not None else loan.total_amount),
-            "start_date": str(loan.start_date.date() if isinstance(loan.start_date, _dt) else loan.start_date),
-            "due_date": str(loan.due_date) if loan.due_date else None,
-        })
+    items = _calc_uncollected_dues(db, check_date_str)
 
     total = len(items)
     page = items[offset:offset + limit]
@@ -957,17 +882,13 @@ def get_uncollected_dues(
 @router.get("/uncollected-dues-report")
 def get_uncollected_dues_report(
     date: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    PDF report of uncollected dues for the given date.
-
-    Accepts either a single `date` (matching the single-day model used by
-    the on-screen list at /uncollected-dues) or an explicit `start_date` /
-    `end_date` range for backward compatibility.
+    PDF report of uncollected dues for the given date. Uses the same
+    running-balance _calc_uncollected_dues helper as the on-screen list
+    at /uncollected-dues, so the two always agree.
     """
     from io import BytesIO
     from datetime import datetime as _dt
@@ -982,12 +903,9 @@ def get_uncollected_dues_report(
     from reportlab.lib.units import mm
     from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 
-    if not start_date or not end_date:
-        effective_date = date or now_eat().date().isoformat()
-        start_date = start_date or effective_date
-        end_date = end_date or effective_date
+    check_date_str = date or now_eat().date().isoformat()
 
-    items = _calc_uncollected_dues(db, start_date, end_date)
+    items = _calc_uncollected_dues(db, check_date_str)
 
     total_uncollected = sum(float(row["loan_balance"] or 0) for row in items)
 
@@ -1026,7 +944,7 @@ def get_uncollected_dues_report(
     ]))
     right_tbl = Table(
         [[Paragraph("UNCOLLECTED DUES REPORT", rt_style)],
-         [Paragraph(f"Period: {start_date} - {end_date}", rs_style)],
+         [Paragraph(f"Date: {check_date_str}", rs_style)],
          [Paragraph(f"Generated: {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %b %Y, %H:%M')} EAT", rs_style)]],
         colWidths=[None],
     )
@@ -1061,29 +979,26 @@ def get_uncollected_dues_report(
     if not items:
         story.append(Paragraph("All dues have been collected for this date.", base["Normal"]))
     else:
-        def _fmt_arrears(val):
+        def _fmt_paid(val):
             v = float(val)
             if v > 0.01:
-                return f"+{v:,.2f}"
-            elif v < -0.01:
-                return f"-{abs(v):,.2f}"
-            else:
-                return "0.00"
+                return f"{v:,.2f}"
+            return "0"
 
-        rows = [["#", "CUSTOMER", "PHONE", "DAILY INSTALMENT (KES)", "LOAN BALANCE (KES)", "SKIPPED DAYS", "ARREARS (KES)"]]
+        rows = [["#", "CUSTOMER", "PHONE", "DUE DATE", "DAILY", "BALANCE", "PAID"]]
         for idx, row in enumerate(items, 1):
             rows.append([
                 str(idx),
                 row["customer_name"] or "-",
                 row["customer_phone"] or "-",
+                row.get("due_date") or "-",
                 f"{float(row['daily_instalment']):,.2f}",
                 f"{float(row['loan_balance']):,.2f}",
-                str(row["skipped_days"]),
-                _fmt_arrears(row.get("arrears", 0)),
+                _fmt_paid(row.get("paid", 0)),
             ])
 
         tbl = Table(rows, repeatRows=1,
-                    colWidths=[7*mm, 36*mm, 26*mm, 28*mm, 28*mm, 20*mm, 26*mm])
+                    colWidths=[7*mm, 36*mm, 26*mm, 26*mm, 24*mm, 28*mm, 22*mm])
         tbl.setStyle(TableStyle([
             ("FONTNAME",       (0,0),(-1, 0), "Helvetica-Bold"),
             ("FONTNAME",       (0,1),(-1,-1), "Helvetica"),
@@ -1092,9 +1007,8 @@ def get_uncollected_dues_report(
             ("BACKGROUND",     (0,0),(-1, 0), LIGHT_BG),
             ("ALIGN",          (0,0),(0,-1),  "CENTER"),
             ("ALIGN",          (1,0),(2,-1),  "LEFT"),
-            ("ALIGN",          (3,0),(4,-1),  "RIGHT"),
-            ("ALIGN",          (6,0),(6,-1),  "RIGHT"),
-            ("ALIGN",          (5,0),(5,-1),  "CENTER"),
+            ("ALIGN",          (3,0),(3,-1),  "CENTER"),
+            ("ALIGN",          (4,0),(6,-1),  "RIGHT"),
             ("LINEBELOW",      (0,0),(-1, 0), 0.75, BORDER),
             ("LINEBELOW",      (0,1),(-1,-2), 0.35, BORDER),
             ("BOX",            (0,0),(-1,-1), 0.75, BORDER),
@@ -1120,7 +1034,7 @@ def get_uncollected_dues_report(
         buffer,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename=uncollected_dues_report_{end_date}.pdf"
+            "Content-Disposition": f"attachment; filename=uncollected_dues_report_{check_date_str}.pdf"
         },
     )
 
