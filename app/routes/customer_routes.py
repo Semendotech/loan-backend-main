@@ -2,6 +2,7 @@ import re
 from urllib.parse import urlparse
 from app.utils.timezone import now_eat
 from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -159,20 +160,34 @@ async def list_customers(
     result = await db.execute(stmt)
     customers = result.scalars().all()
 
-    # Determine each customer's current loan status: Active, Overdue, Defaulter, or Clean
+    # Determine each customer's current loan status LIVE from balance and
+    # elapsed days - not from the stored Loan.status enum, which can go
+    # stale. balance > 0 and within 30 days of start = Active (green);
+    # balance > 0 and 30+ days elapsed = Overdue (red); is_defaulter flag
+    # always wins; balance == 0 (or no loan) = Clean / No active loan.
     customer_id_numbers = [c.id_number for c in customers]
     status_by_customer = {}
     if customer_id_numbers:
+        today = now_eat().date()
         loans_result = await db.execute(
-            select(Loan.customer_id, Loan.status, Loan.is_defaulter).filter(
+            select(Loan.customer_id, Loan.remaining_amount, Loan.start_date, Loan.is_defaulter).filter(
                 Loan.customer_id.in_(customer_id_numbers),
-                Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
+                Loan.remaining_amount > 0,
             )
         )
-        for cust_id, loan_status, is_defaulter in loans_result.fetchall():
+        for cust_id, remaining_amount, start_date, is_defaulter in loans_result.fetchall():
+            loan_start = start_date.date() if isinstance(start_date, datetime) else start_date
             if is_defaulter:
                 status_by_customer[cust_id] = "Defaulter"
-            elif loan_status == LoanStatus.OVERDUE and status_by_customer.get(cust_id) != "Defaulter":
+                continue
+            if status_by_customer.get(cust_id) == "Defaulter":
+                continue
+            if loan_start:
+                last_active_day = loan_start + timedelta(days=29)
+                is_overdue = today > last_active_day
+            else:
+                is_overdue = False
+            if is_overdue:
                 status_by_customer[cust_id] = "Overdue"
             elif cust_id not in status_by_customer:
                 status_by_customer[cust_id] = "Active"
