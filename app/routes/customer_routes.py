@@ -622,51 +622,11 @@ async def delete_customer(
             detail="Customer not found"
         )
     
-    # Check for active loans
-    active_loans_result = await db.execute(
-        select(Loan).filter(
-            Loan.customer_id == customer.id_number,
-            Loan.status == LoanStatus.ACTIVE
-        )
-    )
-    active_loans = active_loans_result.scalars().all()
-    
-    if active_loans:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete customer with active loans"
-        )
-    
-    # Check for overdue loans
-    overdue_loans_result = await db.execute(
-        select(Loan).filter(
-            Loan.customer_id == customer.id_number,
-            Loan.status.in_([LoanStatus.OVERDUE, LoanStatus.ARREARS])
-        )
-    )
-    overdue_loans = overdue_loans_result.scalars().all()
-    
-    if overdue_loans:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete customer with overdue loans"
-        )
-    
-    # Check for active arrears
-    active_arrears_result = await db.execute(
-        select(Arrears).filter(
-            Arrears.customer_id == customer.id,
-            Arrears.is_cleared == False
-        )
-    )
-    active_arrears = active_arrears_result.scalars().all()
-    
-    if active_arrears:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete customer with active arrears"
-        )
-    
+    # NOTE: previously blocked deletion of customers with active/overdue
+    # loans or uncleared arrears. Per business decision, deletion is now
+    # allowed unconditionally (balance > 0 included) - this is a hard
+    # delete that permanently erases the loan/arrears history below.
+
     # Delete all loans and their cascading installments
     all_loans_result = await db.execute(
         select(Loan).filter(Loan.customer_id == customer.id_number)
