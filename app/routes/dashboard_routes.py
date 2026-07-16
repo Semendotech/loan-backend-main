@@ -955,13 +955,18 @@ def get_uncollected_dues(
 
 @router.get("/uncollected-dues-report")
 def get_uncollected_dues_report(
-    start_date: str,
-    end_date: str,
+    date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
     PDF report of uncollected dues for the given date.
+
+    Accepts either a single `date` (matching the single-day model used by
+    the on-screen list at /uncollected-dues) or an explicit `start_date` /
+    `end_date` range for backward compatibility.
     """
     from io import BytesIO
     from datetime import datetime as _dt
@@ -975,6 +980,11 @@ def get_uncollected_dues_report(
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+
+    if not start_date or not end_date:
+        effective_date = date or now_eat().date().isoformat()
+        start_date = start_date or effective_date
+        end_date = end_date or effective_date
 
     items = _calc_uncollected_dues(db, start_date, end_date)
 
