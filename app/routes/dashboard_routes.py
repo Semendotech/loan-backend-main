@@ -895,6 +895,8 @@ def get_uncollected_dues(
         _dt.strptime(date, "%Y-%m-%d").date() if date else now_eat().date()
     )
 
+    from sqlalchemy.orm import selectinload
+
     loans = db.query(Loan).options(selectinload(Loan.customer)).filter(
         Loan.status != LoanStatus.COMPLETED,
         Loan.remaining_amount > 0,
