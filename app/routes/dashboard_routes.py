@@ -228,29 +228,28 @@ def get_defaulters_list(
 ):
     """
     Get list of defaulter loans.
-    
-    Definition: ACTIVE loans with is_defaulter == true
-    
-    Returns: Loans flagged as defaulters with details
+
+    TRUE Definition: ACTIVE loans with 5 OR MORE CONSECUTIVE DAYS (ending
+    today) where that specific day's payment fell short of the daily
+    instalment. This replaced the old lifetime-cumulative is_defaulter
+    check, which flagged loans after just 1 day behind (that concept is
+    now served by the separate /arrears endpoint instead).
     """
     from sqlalchemy.orm import selectinload
     from app.models import Customer
-
-    query = db.query(Loan).options(selectinload(Loan.customer)).filter(
-        Loan.is_defaulter == True,
-        Loan.status == LoanStatus.ACTIVE,
-    )
-
-    total = query.count()
-    defaulters = query.order_by(Loan.defaulter_flagged_date.desc()).limit(limit).offset(offset).all()
-
     from datetime import datetime as _dt
     from datetime import timedelta as _td
     from app.models import Installment as _Installment
     from collections import defaultdict as _defaultdict
 
     today = now_eat().date()
-    loan_ids = [d.id for d in defaulters]
+
+    # Load all ACTIVE loans (candidates) - filtering to >=5 days happens in Python below
+    candidates = db.query(Loan).options(selectinload(Loan.customer)).filter(
+        Loan.status == LoanStatus.ACTIVE,
+    ).all()
+
+    loan_ids = [d.id for d in candidates]
     all_installments = db.query(_Installment).filter(
         _Installment.loan_id.in_(loan_ids),
         func.date(_Installment.payment_date) <= today,
@@ -278,6 +277,14 @@ def get_defaulters_list(
                 break
         return skipped
 
+    # TRUE defaulter rule: 5+ consecutive skipped days
+    defaulters_with_days = [(d, _days_defaulted(d)) for d in candidates]
+    defaulters_with_days = [(d, days) for d, days in defaulters_with_days if days >= 5]
+    defaulters_with_days.sort(key=lambda pair: pair[1], reverse=True)
+
+    total = len(defaulters_with_days)
+    page = defaulters_with_days[offset:offset + limit]
+
     return {
         "items": [
             {
@@ -294,12 +301,11 @@ def get_defaulters_list(
                 "loan_balance": d.remaining_amount,
                 "daily_instalment": d.daily_instalment,
                 "days_since_start": d.days_since_start,
-                "days_defaulted": _days_defaulted(d),
+                "days_defaulted": days,
                 "start_date": d.start_date,
                 "date_loan_taken": d.start_date,
+                "due_date": d.due_date,
                 "status": d.status.value,
-                "is_defaulter": d.is_defaulter,
-                "defaulter_flagged_date": d.defaulter_flagged_date,
                 "customer": ({
                     "name": d.customer.name,
                     "id_number": d.customer.id_number,
@@ -307,7 +313,7 @@ def get_defaulters_list(
                     "location": d.customer.location,
                 } if d.customer else None),
             }
-            for d in defaulters
+            for d, days in page
         ],
         "total": total,
         "limit": limit,
@@ -868,18 +874,72 @@ def _calc_uncollected_dues(db: Session, start_date_str: str, end_date_str: str):
 
 @router.get("/uncollected-dues")
 def get_uncollected_dues(
-    start_date: str,
-    end_date: str,
+    date: str | None = None,
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Get active/overdue loans whose instalment for `end_date` has not been
-    collected, with how many consecutive days they've been skipped.
+    Get loans (any non-completed status, balance > 0) whose instalment for
+    the given single `date` (default: today) has not been collected.
+
+    This replaced the old date-range cumulative check, which kept showing
+    customers even after they paid "yesterday" if they had an older
+    backlog within the selected window - that lifetime-cumulative concept
+    is now served separately by /arrears.
     """
-    items = _calc_uncollected_dues(db, start_date, end_date)
+    from datetime import datetime as _dt
+
+    check_date = (
+        _dt.strptime(date, "%Y-%m-%d").date() if date else now_eat().date()
+    )
+
+    loans = db.query(Loan).options(selectinload(Loan.customer)).filter(
+        Loan.status != LoanStatus.COMPLETED,
+        Loan.remaining_amount > 0,
+    ).all()
+
+    eligible = []
+    for loan in loans:
+        start = loan.start_date.date() if isinstance(loan.start_date, _dt) else loan.start_date
+        if not start or check_date < start:
+            continue
+        last_day = start + timedelta(days=29)
+        if check_date > last_day:
+            continue
+        eligible.append(loan)
+
+    if not eligible:
+        return {"items": [], "total": 0, "limit": limit, "offset": offset}
+
+    loan_ids = [loan.id for loan in eligible]
+    day_installments = db.query(Installment).filter(
+        Installment.loan_id.in_(loan_ids),
+        func.date(Installment.payment_date) == check_date,
+    ).all()
+
+    paid_today_by_loan = {}
+    for inst in day_installments:
+        paid_today_by_loan[inst.loan_id] = paid_today_by_loan.get(inst.loan_id, 0.0) + float(inst.amount or 0)
+
+    items = []
+    for loan in eligible:
+        paid_today = paid_today_by_loan.get(loan.id, 0.0)
+        if paid_today >= loan.daily_instalment - 0.01:
+            continue  # fully paid for this date
+
+        customer = loan.customer
+        items.append({
+            "loan_id": loan.id,
+            "customer_name": customer.name if customer else None,
+            "customer_phone": customer.phone if customer else None,
+            "customer_id_number": loan.customer_id,
+            "loan_balance": float(loan.remaining_amount if loan.remaining_amount is not None else loan.total_amount),
+            "start_date": str(loan.start_date.date() if isinstance(loan.start_date, _dt) else loan.start_date),
+            "due_date": str(loan.due_date) if loan.due_date else None,
+        })
+
     total = len(items)
     page = items[offset:offset + limit]
 
@@ -1632,3 +1692,256 @@ def get_disbursed_loans_report(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=disbursed_loans_report_{suffix}.pdf"},
     )
+
+
+# ============ ARREARS (lifetime backlog, any status except COMPLETED) ============
+
+def _calc_arrears(db: Session):
+    """
+    ARREARS = lifetime cumulative backlog on any non-completed loan
+    (ACTIVE, OVERDUE, or flagged defaulter - anyone with balance > 0).
+
+    Unlike the old date-range "Uncollected Dues" window logic, this is NOT
+    forgiving across a window - it looks at the loan's ENTIRE history from
+    start_date to today. A loan only disappears from Arrears once its
+    cumulative paid catches back up to cumulative expected.
+
+    Returns per loan: backlog amount, total loan amount, remaining balance,
+    start date, due date, and the full list of skipped dates (for expand
+    on click in the UI) - not just a count.
+    """
+    from sqlalchemy.orm import selectinload
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from collections import defaultdict as _defaultdict
+
+    today = now_eat().date()
+
+    loans = db.query(Loan).options(selectinload(Loan.customer)).filter(
+        Loan.status != LoanStatus.COMPLETED,
+        Loan.remaining_amount > 0,
+    ).all()
+
+    if not loans:
+        return []
+
+    loan_ids = [loan.id for loan in loans]
+    all_installments = db.query(Installment).filter(
+        Installment.loan_id.in_(loan_ids),
+        func.date(Installment.payment_date) <= today,
+    ).all()
+
+    sums_by_loan = _defaultdict(lambda: _defaultdict(float))
+    for inst in all_installments:
+        d = inst.payment_date.date() if isinstance(inst.payment_date, _dt) else inst.payment_date
+        sums_by_loan[inst.loan_id][d] += float(inst.amount or 0)
+
+    items = []
+    for loan in loans:
+        start = loan.start_date.date() if isinstance(loan.start_date, _dt) else loan.start_date
+        if not start or today < start:
+            continue
+
+        daily_instalment = loan.daily_instalment
+        sums_by_date = sums_by_loan[loan.id]
+
+        elapsed_days = (today - start).days + 1
+        expected_total = daily_instalment * elapsed_days
+        paid_total = sum(sums_by_date.values())
+        backlog = expected_total - paid_total
+
+        if backlog <= 0.01:
+            continue  # not behind, lifetime-cumulative
+
+        # Full list of skipped dates (not just a count), consecutive run
+        # ending today, never going before loan start.
+        skipped_dates = []
+        current = today
+        while current >= start:
+            paid = sums_by_date.get(current, 0.0)
+            if paid < daily_instalment - 0.01:
+                skipped_dates.append(str(current))
+                current -= _td(days=1)
+            else:
+                break
+        skipped_dates.reverse()  # oldest first
+
+        customer = loan.customer
+        items.append({
+            "loan_id": loan.id,
+            "customer_id": loan.customer_id,
+            "customer_name": customer.name if customer else None,
+            "customer_phone": customer.phone if customer else None,
+            "customer_id_number": loan.customer_id,
+            "backlog_amount": backlog,
+            "total_loan_amount": loan.total_amount,
+            "remaining_balance": loan.remaining_amount,
+            "start_date": str(start),
+            "due_date": str(loan.due_date) if loan.due_date else None,
+            "skipped_days_count": len(skipped_dates),
+            "skipped_dates": skipped_dates,
+        })
+
+    items.sort(key=lambda r: r["backlog_amount"], reverse=True)
+    return items
+
+
+@router.get("/arrears")
+def get_arrears_list(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get all customers with a lifetime cumulative payment backlog."""
+    items = _calc_arrears(db)
+    total = len(items)
+    page = items[offset:offset + limit]
+    return {
+        "items": page,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/arrears-report")
+def get_arrears_report(
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """PDF report of all arrears (lifetime backlog)."""
+    from io import BytesIO
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+
+    items = _calc_arrears(db)
+    total_backlog = sum(float(row["backlog_amount"] or 0) for row in items)
+
+    NAVY     = colors.HexColor("#0f2942")
+    SLATE    = colors.HexColor("#475569")
+    LIGHT_BG = colors.HexColor("#f8fafc")
+    BORDER   = colors.HexColor("#cbd5e1")
+    GOLD     = colors.HexColor("#c9a84c")
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=letter,
+        topMargin=14*mm, bottomMargin=14*mm,
+        leftMargin=18*mm, rightMargin=18*mm,
+    )
+    base = getSampleStyleSheet()
+
+    inst_style = ParagraphStyle("AR_Inst", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=17, textColor=NAVY, leading=20)
+    tag_style  = ParagraphStyle("AR_Tag",  parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=8, textColor=GOLD, leading=10)
+    rt_style   = ParagraphStyle("AR_RT",   parent=base["Normal"], fontName="Helvetica-Bold", fontSize=9, textColor=NAVY, leading=11, alignment=TA_RIGHT)
+    rs_style   = ParagraphStyle("AR_RS",   parent=base["Normal"], fontName="Helvetica", fontSize=8, textColor=SLATE, leading=10, alignment=TA_RIGHT)
+    sl_style   = ParagraphStyle("AR_SL",   parent=base["Normal"], fontName="Helvetica", fontSize=7.5, textColor=SLATE, leading=10, alignment=TA_CENTER)
+    sv_style   = ParagraphStyle("AR_SV",   parent=base["Normal"], fontName="Helvetica-Bold", fontSize=13, textColor=NAVY, leading=16, alignment=TA_CENTER)
+
+    story = []
+    left_tbl = Table(
+        [[Paragraph("KODONGO SAVINGS & CREDIT", inst_style)],
+         [Paragraph("Trusted Financial Solutions", tag_style)]],
+        colWidths=[None],
+    )
+    left_tbl.setStyle(TableStyle([
+        ("LEFTPADDING", (0,0),(-1,-1), 0), ("RIGHTPADDING", (0,0),(-1,-1), 0),
+        ("TOPPADDING", (0,0),(-1,-1), 0), ("BOTTOMPADDING", (0,0),(-1,-1), 2),
+    ]))
+    right_tbl = Table(
+        [[Paragraph("ARREARS REPORT", rt_style)],
+         [Paragraph(f"Generated: {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %b %Y, %H:%M')} EAT", rs_style)]],
+        colWidths=[None],
+    )
+    right_tbl.setStyle(TableStyle([
+        ("LEFTPADDING", (0,0),(-1,-1), 0), ("RIGHTPADDING", (0,0),(-1,-1), 0),
+        ("TOPPADDING", (0,0),(-1,-1), 0), ("BOTTOMPADDING", (0,0),(-1,-1), 2),
+    ]))
+    hdr = Table([[left_tbl, right_tbl]], colWidths=["60%","40%"])
+    hdr.setStyle(TableStyle([
+        ("VALIGN", (0,0),(-1,-1), "TOP"),
+        ("LEFTPADDING", (0,0),(-1,-1), 0), ("RIGHTPADDING", (0,0),(-1,-1), 0),
+    ]))
+    story.append(hdr)
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=2.5, color=NAVY, spaceAfter=2))
+    story.append(HRFlowable(width="100%", thickness=1, color=GOLD, spaceAfter=10))
+
+    sum_tbl = Table(
+        [[Paragraph("TOTAL CUSTOMERS", sl_style), Paragraph("TOTAL BACKLOG (KES)", sl_style)],
+         [Paragraph(str(len(items)), sv_style), Paragraph(f"KES {total_backlog:,.2f}", sv_style)]],
+        colWidths=["30%", "70%"],
+    )
+    sum_tbl.setStyle(TableStyle([
+        ("BOX", (0,0),(-1,-1), 0.75, BORDER),
+        ("LINEAFTER", (0,0),(0,-1), 0.5, BORDER),
+        ("TOPPADDING", (0,0),(-1,-1), 6),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 6),
+    ]))
+    story.append(sum_tbl)
+    story.append(Spacer(1, 14))
+
+    if not items:
+        story.append(Paragraph("No customers currently in arrears.", base["Normal"]))
+    else:
+        rows = [["#", "CUSTOMER", "PHONE", "TOTAL LOAN (KES)", "BALANCE (KES)", "SKIPPED", "BACKLOG (KES)"]]
+        for idx, row in enumerate(items, 1):
+            rows.append([
+                str(idx),
+                row["customer_name"] or "-",
+                row["customer_phone"] or "-",
+                f"{float(row['total_loan_amount']):,.2f}",
+                f"{float(row['remaining_balance']):,.2f}",
+                str(row["skipped_days_count"]),
+                f"{float(row['backlog_amount']):,.2f}",
+            ])
+        tbl = Table(rows, repeatRows=1, colWidths=[7*mm, 34*mm, 24*mm, 28*mm, 26*mm, 18*mm, 28*mm])
+        tbl.setStyle(TableStyle([
+            ("FONTNAME", (0,0),(-1,0), "Helvetica-Bold"),
+            ("FONTNAME", (0,1),(-1,-1), "Helvetica"),
+            ("FONTSIZE", (0,0),(-1,-1), 7.5),
+            ("TEXTCOLOR", (0,0),(-1,0), SLATE),
+            ("BACKGROUND", (0,0),(-1,0), LIGHT_BG),
+            ("ALIGN", (0,0),(0,-1), "CENTER"),
+            ("ALIGN", (1,0),(2,-1), "LEFT"),
+            ("ALIGN", (3,0),(4,-1), "RIGHT"),
+            ("ALIGN", (6,0),(6,-1), "RIGHT"),
+            ("ALIGN", (5,0),(5,-1), "CENTER"),
+            ("LINEBELOW", (0,0),(-1,0), 0.75, BORDER),
+            ("LINEBELOW", (0,1),(-1,-2), 0.35, BORDER),
+            ("BOX", (0,0),(-1,-1), 0.75, BORDER),
+            ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, LIGHT_BG]),
+            ("TOPPADDING", (0,0),(-1,-1), 4),
+            ("BOTTOMPADDING", (0,0),(-1,-1), 4),
+            ("LEFTPADDING", (0,0),(-1,-1), 5),
+            ("RIGHTPADDING", (0,0),(-1,-1), 5),
+        ]))
+        story.append(tbl)
+
+    story.append(Spacer(1, 18))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=BORDER, spaceAfter=6))
+    story.append(Paragraph(
+        f"Generated on {_dt.now(ZoneInfo('Africa/Nairobi')).strftime('%d %B %Y at %H:%M EAT')}. "
+        f"This report is for internal use only. Kodongo Savings & Credit.",
+        ParagraphStyle("AR_Ftr", parent=base["Normal"], fontName="Helvetica-Oblique", fontSize=7, textColor=SLATE, leading=10, alignment=TA_CENTER),
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=arrears_report_{now_eat().strftime('%Y%m%d')}.pdf"},
+    )
+
+# === ARREARS_FEATURE_APPLIED ===
