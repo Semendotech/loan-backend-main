@@ -937,6 +937,7 @@ def get_uncollected_dues(
             "customer_name": customer.name if customer else None,
             "customer_phone": customer.phone if customer else None,
             "customer_id_number": loan.customer_id,
+            "daily_instalment": loan.daily_instalment,
             "loan_balance": float(loan.remaining_amount if loan.remaining_amount is not None else loan.total_amount),
             "start_date": str(loan.start_date.date() if isinstance(loan.start_date, _dt) else loan.start_date),
             "due_date": str(loan.due_date) if loan.due_date else None,
