@@ -824,17 +824,16 @@ def _calc_uncollected_dues(db: Session, check_date_str: str):
 
         due = loan.due_date.date() if isinstance(loan.due_date, datetime) else loan.due_date
 
-        running_balance = 0.0
-        current = loan_start
-        while current <= check_date:
-            paid = sums_by_date.get(current, 0.0)
-            running_balance += paid - daily_instalment
-            current += timedelta(days=1)
-
-        if running_balance >= -0.01:
-            continue
+        days_before = (check_date - loan_start).days
+        expected_before = daily_instalment * days_before
+        paid_before = sum(amt for d, amt in sums_by_date.items() if d < check_date)
+        credit_before = max(0.0, paid_before - expected_before)
 
         paid_on_date = sums_by_date.get(check_date, 0.0)
+        effective_today = credit_before + paid_on_date
+
+        if effective_today >= daily_instalment - 0.01:
+            continue
 
         customer = loan.customer
         items.append({
@@ -845,7 +844,7 @@ def _calc_uncollected_dues(db: Session, check_date_str: str):
             "daily_instalment": daily_instalment,
             "loan_balance": float(loan.remaining_amount if loan.remaining_amount is not None else loan.total_amount),
             "due_date": str(due) if due else None,
-            "paid": paid_on_date,
+            "paid": effective_today,
         })
 
     return items
