@@ -1777,12 +1777,19 @@ def _calc_arrears(db: Session):
         # Every day within the loan's term where paid < daily instalment -
         # not just a trailing consecutive run, so a recent payment doesn't
         # mask an older unpaid gap.
+        # Running credit balance: a day only counts as genuinely skipped if
+        # cumulative payments to date fall short of cumulative instalments
+        # due to date. This lets a prepayment (or lump sum) roll forward and
+        # cover future days, instead of flagging a day just because nothing
+        # landed on that exact date.
         end_day = min(today, due) if due else today
         skipped_dates = []
+        running_balance = 0.0
         current = start
         while current <= end_day:
             paid = sums_by_date.get(current, 0.0)
-            if paid < daily_instalment - 0.01:
+            running_balance += paid - daily_instalment
+            if running_balance < -0.01:
                 skipped_dates.append(str(current))
             current += _td(days=1)
 
