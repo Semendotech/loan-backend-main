@@ -1745,26 +1745,37 @@ def _calc_arrears(db: Session):
         daily_instalment = loan.daily_instalment
         sums_by_date = sums_by_loan[loan.id]
 
+        due = loan.due_date.date() if isinstance(loan.due_date, _dt) else loan.due_date
+
+        # Cap elapsed days at the loan's actual term (start -> due date),
+        # so a loan that's months old doesn't keep accumulating expected
+        # instalments past its own schedule.
+        term_days = (due - start).days + 1 if due else None
         elapsed_days = (today - start).days + 1
+        if term_days:
+            elapsed_days = min(elapsed_days, term_days)
+
         expected_total = daily_instalment * elapsed_days
+        # Safety net: expected can never exceed the total loan amount.
+        expected_total = min(expected_total, loan.total_amount)
+
         paid_total = sum(sums_by_date.values())
         backlog = expected_total - paid_total
 
         if backlog <= 0.01:
             continue  # not behind, lifetime-cumulative
 
-        # Full list of skipped dates (not just a count), consecutive run
-        # ending today, never going before loan start.
+        # Every day within the loan's term where paid < daily instalment -
+        # not just a trailing consecutive run, so a recent payment doesn't
+        # mask an older unpaid gap.
+        end_day = min(today, due) if due else today
         skipped_dates = []
-        current = today
-        while current >= start:
+        current = start
+        while current <= end_day:
             paid = sums_by_date.get(current, 0.0)
             if paid < daily_instalment - 0.01:
                 skipped_dates.append(str(current))
-                current -= _td(days=1)
-            else:
-                break
-        skipped_dates.reverse()  # oldest first
+            current += _td(days=1)
 
         customer = loan.customer
         items.append({
@@ -1790,11 +1801,22 @@ def _calc_arrears(db: Session):
 def get_arrears_list(
     limit: int = 50,
     offset: int = 0,
+    q: str = None,
     db: Session = Depends(get_sync_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Get all customers with a lifetime cumulative payment backlog."""
     items = _calc_arrears(db)
+
+    if q:
+        needle = q.strip().lower()
+        items = [
+            r for r in items
+            if needle in (r.get("customer_name") or "").lower()
+            or needle in (r.get("customer_phone") or "").lower()
+            or needle in (r.get("customer_id_number") or "").lower()
+        ]
+
     total = len(items)
     page = items[offset:offset + limit]
     return {
