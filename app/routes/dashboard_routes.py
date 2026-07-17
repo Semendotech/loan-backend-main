@@ -1165,7 +1165,7 @@ def get_payments_report(
     story.append(Spacer(1, 10))
 
     # Staff totals strip
-    STAFF_NAMES = ["William", "Richard", "Emily", "Elliot"]
+    STAFF_NAMES = ["William", "Richard", "Emilly", "Elliote"]
     staff_totals = {name: 0.0 for name in STAFF_NAMES}
     for inst in installments:
         rb = (inst.recorded_by or "").strip()
